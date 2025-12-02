@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   bot:
     image: node:20-alpine
@@ -25,6 +23,7 @@ services:
   rasa:
     image: rasa/rasa:3.6.21-full
     container_name: rasa-nlu
+    user: "1000:1000"
     command:
       - run
       - --enable-api
