@@ -1,0 +1,12 @@
+version: '3.1'
+intents:
+  - greet
+  - ask_graphrag
+responses:
+  utter_greet:
+    - text: "Hallo! Wie kann ich helfen?"
+  utter_graphrag:
+    - text: "Frag gerne spezifisch, ich leite die Frage an den RAG-Service weiter."
+session_config:
+  session_expiration_time: 60
+  carry_over_slots_to_new_session: true

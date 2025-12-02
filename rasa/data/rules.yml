@@ -1,0 +1,10 @@
+version: '3.1'
+rules:
+  - rule: Begrüßung beantworten
+    steps:
+      - intent: greet
+      - action: utter_greet
+  - rule: GraphRAG Hinweis
+    steps:
+      - intent: ask_graphrag
+      - action: utter_graphrag
