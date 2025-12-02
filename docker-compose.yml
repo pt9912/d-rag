@@ -1,0 +1,172 @@
+version: "3.9"
+
+services:
+  bot:
+    image: node:20-alpine
+    container_name: bot-service
+    working_dir: /app
+    volumes:
+      - ./bot:/app
+    command:
+      - sh
+      - -c
+      - npm install && npm run start
+    ports:
+      - "3978:3978"
+    environment:
+      - NODE_ENV=production
+      - NLU_ENDPOINT=http://rasa:5005
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - RAG_ENDPOINT=http://rag-service:8000
+    depends_on:
+      - rasa
+      - otel-collector
+
+  rasa:
+    image: rasa/rasa:3.6.10-full
+    container_name: rasa-nlu
+    command:
+      - run
+      - --enable-api
+      - --cors
+      - "*"
+    ports:
+      - "5005:5005"
+    volumes:
+      - ./rasa:/app
+    environment:
+      - RASA_TELEMETRY_ENABLED=false
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.104.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - prometheus
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: qdrant-vectorstore
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8.3
+    container_name: reranker
+    restart: unless-stopped
+    ports:
+      - "8082:80"
+    volumes:
+      - reranker_models:/data
+    command: --model-id BAAI/bge-reranker-large
+
+  rag-service:
+    image: python:3.11-slim
+    container_name: rag-service
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - >
+        apt-get update &&
+        apt-get install -y --no-install-recommends git &&
+        rm -rf /var/lib/apt/lists/* &&
+        pip install --no-cache-dir . &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./rag:/app
+      - ./docs.git:/sources/docs.git:ro
+      - ./git-workspace:/repos
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - RERANKER_URL=http://reranker:80
+    depends_on:
+      - qdrant
+      - ollama
+      - reranker
+
+  extractor:
+    image: python:3.11-slim
+    container_name: doc-extractor
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - >
+        pip install --no-cache-dir . &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8100
+    volumes:
+      - ./extractor:/app
+      - ./rag/data:/data
+    ports:
+      - "8100:8100"
+    environment:
+      - EXTRACT_OUTPUT_DIR=/data
+      - RAG_SERVICE_URL=http://rag-service:8000
+    depends_on:
+      - rag-service
+
+  mcp:
+    image: python:3.11-slim
+    container_name: mcp-gateway
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - >
+        pip install --no-cache-dir . &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8800
+    volumes:
+      - ./mcp:/app
+    ports:
+      - "8800:8800"
+    environment:
+      - RAG_SERVICE_URL=http://rag-service:8000
+    depends_on:
+      - rag-service
+
+volumes:
+  qdrant_data:
+  ollama_models:
+  reranker_models:
