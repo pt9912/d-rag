@@ -45,23 +45,23 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 | `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                  |
 | `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                         |
 | `bot`                                     | Express (Node 20)               | Minimaler API-Stub (`bot/src/index.js`). Route `/ask` proxied Anfragen an `rag-service` und dient als Beispielintegration für Conversational Agents.                                                                                                |
-| `rasa`                                    | Rasa 3.6                        | NLU-Container, vorbereitet um Intents zu erkennen. Im aktuellen Stand wird er noch nicht aktiv vom Bot genutzt, kann aber zur Intent-bestimmten RAG-Abfrage erweitert werden.                                                                       |
+| `rasa`                                    | Rasa 3.6.21                     | NLU-Container, vorbereitet um Intents zu erkennen. Im aktuellen Stand wird er noch nicht aktiv vom Bot genutzt, kann aber zur Intent-bestimmten RAG-Abfrage erweitert werden.                                                                       |
 | `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                  |
 | `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                       |
 
 ### 2.1 Wichtige Endpunkte
 
-| Service        | Endpoint          | Methode | Beschreibung                                  |
-| -------------- | ----------------- | ------- | --------------------------------------------- |
-| rag-service    | `/query`          | POST    | Haupt-RAG-Query                               |
-| rag-service    | `/ingest`         | POST    | Manuelles Ingest                              |
-| rag-service    | `/update`         | POST    | Re-Ingest/Delta-Update                        |
-| rag-service    | `/git/webhook/{repo}` | POST | Git-Push-Webhook (optional signiert)          |
-| extractor      | `/extract/pdf`    | POST    | PDF → Markdown                                |
-| extractor      | `/extract/zip`    | POST    | ZIP → mehrere Markdown-Dateien                |
-| bot            | `/ask`            | POST    | Proxy auf RAG                                 |
-| reranker (TEI) | `/rerank`         | POST    | Cross-Encoder Re-Ranking                      |
-| mcp            | JSON-RPC Tools    | POST/stream | `rag.query`, `rag.ingest`, `rag.update`   |
+| Service        | Endpoint              | Methode     | Beschreibung                            |
+| -------------- | --------------------- | ----------- | --------------------------------------- |
+| rag-service    | `/query`              | POST        | Haupt-RAG-Query                         |
+| rag-service    | `/ingest`             | POST        | Manuelles Ingest                        |
+| rag-service    | `/update`             | POST        | Re-Ingest/Delta-Update                  |
+| rag-service    | `/git/webhook/{repo}` | POST        | Git-Push-Webhook (optional signiert)    |
+| extractor      | `/extract/pdf`        | POST        | PDF → Markdown                          |
+| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Markdown-Dateien          |
+| bot            | `/ask`                | POST        | Proxy auf RAG                           |
+| reranker (TEI) | `/rerank`             | POST        | Cross-Encoder Re-Ranking                |
+| mcp            | JSON-RPC Tools        | POST/stream | `rag.query`, `rag.ingest`, `rag.update` |
 
 ## 3. Datenflüsse
 
