@@ -35,4 +35,6 @@ rag/data/*
 
 # rasa
 rasa/.rasa
+rasa/.config
+rasa/.keras
 rasa/models/*.tar.gz
