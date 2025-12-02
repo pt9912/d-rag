@@ -1,6 +1,6 @@
 # Lokales RAG-Setup
 
-Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot (Express), Rasa NLU, Observability-Komponenten (OTel Collector, Prometheus, Grafana) sowie einen lokalen RAG-Service mit Qdrant und Ollama startet. Hinweis: Die Applikationen senden ohne zusätzliche Instrumentierung keine OTEL-Traces/Metriken; Grafana/Prometheus bleiben daher leer, bis SDKs eingebaut werden.
+Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express), Rasa als Intent-only NLU, Observability-Komponenten (OTel Collector, Prometheus, Grafana) sowie einen lokalen RAG-Service mit Qdrant und Ollama startet. Hinweis: Die Applikationen senden ohne zusätzliche OTEL-Traces/Metriken; Prometheus sammelt aktuell nur die Bot-Metriken (`/metrics`).
 (MAF: https://github.com/microsoft/Agent-Framework-Samples/tree/main/06.RAGs)
 
 ## Aufbau
@@ -9,8 +9,9 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot 
 - `rag/`: FastAPI-App, die Dokumente in Qdrant ingestiert (Chunking + Embeddings per Ollama), per BGE-Reranker re-rankt und Anfragen beantwortet.
 - `extractor/`: FastAPI-Dienst zur PDF-Extraktion und optionalem Triggern des RAG-Updates.
 - `mcp/`: JSON-RPC-Gateway (Model Context Protocol) für Tools wie `rag.query`, `rag.ingest`, `rag.update`.
-- `bot/`: Express-Stub, der Fragen an den RAG-Service weiterleitet (`POST /ask`).
-- `rasa/`, `otel-collector-config.yaml`, `prometheus.yml`: Minimal-Configs für NLU bzw. Observability.
+- `bot/`: Express-Bot mit Intent-Routing via Rasa NLU. Statische Intents (`greet`, `help`, `goodbye`, `thank`) werden direkt beantwortet, `ask_rag` und Fallbacks (`nlu_fallback`, `out_of_scope`, niedrige Confidence) werden an den RAG-Service weitergeleitet. Metriken auf Port 9100 (`/metrics`), Readiness `/readyz` prüft Rasa `/status`.
+- `rasa/`: Intent-only NLU-Projekt (Deutsch) mit DIET-Classifier, FallbackClassifier und Entities `topic`, `doc_type`. Training über `rasa train` erzeugt Modelle in `rasa/models`.
+- `otel-collector-config.yaml`, `prometheus.yml`: Minimal-Configs für Observability (Prometheus scraped Collector und Bot).
 
 ## Nutzung
 
@@ -22,14 +23,20 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot 
    ```
    Der Reranker (`BAAI/bge-reranker-large`) wird beim ersten Start automatisch heruntergeladen.
 
-2. **Stack starten**:
+2. **Rasa-NLU trainieren** (vor dem ersten Start oder nach Änderungen in `rasa/`):
+   ```bash
+   docker compose run --rm --user 1000:1000 rasa train
+   ```
+   Das Modell landet unter `rasa/models/*.tar.gz`.
+
+3. **Stack starten**:
    ```bash
    docker compose up -d
    ```
    Der RAG-Service ingestiert beim Start automatisch `rag/data/demo.md`.
 
-3. **Bot-Route testen**:
-   - Die Route `POST /ask` spricht intern `http://rag-service:8000/query` an.
+4. **Bot-Route testen**:
+   - Die Route `POST /ask` ruft erst Rasa `/model/parse` auf, routet je nach Intent und fragt in der Regel den RAG-Service `http://rag-service:8000/query` an (Fallback bei niedriger Confidence oder `out_of_scope`).
    - Sobald die Ports nach außen erreichbar sind:
      ```bash
      curl -X POST localhost:3978/ask \
@@ -38,7 +45,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot 
      ```
      Rollen können alternativ auch per Header übergeben werden: `-H "X-Roles: public,internal"`.
 
-4. **Eigene Dokumente & Updates**:
+5. **Eigene Dokumente & Updates**:
    - Dateien nach `rag/data/` legen (oder einen anderen Pfad wählen) und per
      ```bash
      curl -X POST localhost:8000/ingest \
@@ -104,7 +111,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot 
      ```bash
      curl -X POST http://localhost:8800/mcp \
           -H "Content-Type: application/json" \
-          -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq
      ```
    - Tool-Aufruf (Query):
      ```bash
@@ -121,6 +128,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen einfachen Bot 
 - MCP-Gateway: `docker compose logs mcp`.
 - Reranker-Logs: `docker compose logs reranker`.
 - Der Qdrant-Dashboard ist über `http://localhost:6333/dashboard` erreichbar.
+- Bot Readiness: `curl http://localhost:3978/readyz` (fragt Rasa `/status` ab). Prometheus-Metriken: `curl http://localhost:9100/metrics`.
 - Zum Stoppen einfach `docker compose down`. Volumes (`qdrant_data`, `ollama_models`, `reranker_models`) behalten Vectorstore, Modelle und Reranker.
 
 ## Reranker-Konfiguration

@@ -1,6 +1,6 @@
 # Architektur des lokalen RAG-Stacks
 
-Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostacks unter `docker-compose.yml`. Ziel ist, schnell zu erkennen, welche Dienste beteiligt sind, wie sie interagieren und welche Erweiterungspunkte bzw. Betriebsaspekte zu beachten sind.
+Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostacks unter `docker-compose.yml`. Ziel ist, schnell zu erkennen, welche Dienste beteiligt sind, wie sie interagieren und welche Erweiterungspunkte bzw. Betriebsaspekte zu beachten sind. Der Bot nutzt Rasa als Intent-only NLU, routet statische Intents direkt und leitet Fallbacks an den RAG-Service weiter.
 
 ## 1. Überblick & Ziele
 
@@ -10,58 +10,66 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 - **Deployment-Form:** Einzelnes Docker-Compose-File. Persistente Volumes für Qdrant (`qdrant_data`), Ollama-Modelle (`ollama_models`) und Reranker-Modelle (`reranker_models`). Quelle für Git-Inhalte ist eine lokale Bare-Repo-Mappe `docs.git`, Arbeitskopien landen in `git-workspace`.
 
 ```
-┌─────────┐      ┌────────────────┐      ┌─────────────────────────┐
-│ Client  │<---->│ Bot / MCP /    │<---->│ RAG-Service             │
-│ (REST)  │      │ Direct REST    │      │                         │
-└─────────┘      └────────────────┘      ├──────────┬──────────────┤
-                                         │Ollama    │ Qdrant        │
-                                         │Embedding │ (Vectorstore) │
-                                         └─────┬────┴──────┬────────┘
-                                               │           │
-                                 ┌─────────────▼───────────▼────────┐
-                                 │ Reranker (TEI Cross-Encoder)     │
-                                 └─────────────┬────────────────────┘
-                                               │
-                                     ┌─────────▼────────┐
-                                     │ Ollama LLM        │
-                                     └───────────────────┘
-                 ┌────────────────────┐
-                 │ Doc Extractor      │
-                 └─────────┬──────────┘
-                           │
-                  ┌────────▼──────┐
-                  │ rag/data/*    │
-                  │ (Markdown)    │
-                  └───────────────┘
+┌─────────┐       ┌──────────────────────┐      ┌─────────────────────────┐
+│ Client  │<----->│ Bot / MCP / REST     │----->│ RAG-Service             │
+│ (REST)  │       │ (Intent-Routing)     │      │                         │
+└─────────┘       └─────────┬────────────┘      ├──────────┬──────────────┤
+                            │                   │Ollama    │ Qdrant       │
+                            │                   │Embedding │ (Vectorstore)│
+                            │                   └─────┬────┴──────┬───────┘
+                            │                         │           │
+                            │          ┌──────────────▼───────────▼────────┐
+                            └--------->│ Rasa NLU (model/parse)            │
+                                       └───────────────────────────────────┘
+                                           │
+                                           │ re-routed Intents / Fallbacks
+                                           │
+                             ┌─────────────▼────────────┐
+                             │ Reranker (TEI Cross-Enc) │
+                             └─────────────┬────────────┘
+                                           │
+                                 ┌─────────▼────────┐
+                                 │ Ollama LLM       │
+                                 └──────────────────┘
+             ┌────────────────────┐
+             │ Doc Extractor      │
+             └─────────┬──────────┘
+                       │
+              ┌────────▼──────┐
+              │ rag/data/*    │
+              │ (Markdown)    │
+              └───────────────┘
 ```
 
 ## 2. Komponenten & Verantwortlichkeiten
 
-| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                             |
-| ----------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`). |
-| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                           |
-| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                            |
-| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                  |
-| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                         |
-| `bot`                                     | Express (Node 20)               | Minimaler API-Stub (`bot/src/index.js`). Route `/ask` proxied Anfragen an `rag-service` und dient als Beispielintegration für Conversational Agents.                                                                                                |
-| `rasa`                                    | Rasa 3.6.21                     | NLU-Container, vorbereitet um Intents zu erkennen. Im aktuellen Stand wird er noch nicht aktiv vom Bot genutzt, kann aber zur Intent-bestimmten RAG-Abfrage erweitert werden.                                                                       |
-| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                  |
-| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                       |
+| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`).                                                                                                        |
+| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                                                                                                                                  |
+| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                                                                                                                                   |
+| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                                                                                                                         |
+| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                                                                                                                                |
+| `bot`                                     | Express (Node 20)               | Intent-basiertes Routing (`bot/src/index.js`): ruft Rasa `/model/parse`, sendet `ask_rag`, Fallbacks (`nlu_fallback`, `out_of_scope`, Confidence < Threshold) an den RAG-Service, beantwortet statische Intents (`greet`, `help`, `goodbye`, `thank`) direkt. LRU-Cache für NLU, Prometheus-Metriken `/metrics`, Readiness `/readyz` prüft Rasa `/status`. |
+| `rasa`                                    | Rasa 3.6.21                     | Intent-only NLU (Deutsch) mit DIETClassifier, FallbackClassifier, Entities `topic`/`doc_type`. Training erzeugt Modelle in `rasa/models`; der Bot konsumiert `/model/parse`.                                                                                                                                                                               |
+| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                                                                                                                         |
+| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                                                                                                                              |
 
 ### 2.1 Wichtige Endpunkte
 
-| Service        | Endpoint              | Methode     | Beschreibung                            |
-| -------------- | --------------------- | ----------- | --------------------------------------- |
-| rag-service    | `/query`              | POST        | Haupt-RAG-Query                         |
-| rag-service    | `/ingest`             | POST        | Manuelles Ingest                        |
-| rag-service    | `/update`             | POST        | Re-Ingest/Delta-Update                  |
-| rag-service    | `/git/webhook/{repo}` | POST        | Git-Push-Webhook (optional signiert)    |
-| extractor      | `/extract/pdf`        | POST        | PDF → Markdown                          |
-| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Markdown-Dateien          |
-| bot            | `/ask`                | POST        | Proxy auf RAG                           |
-| reranker (TEI) | `/rerank`             | POST        | Cross-Encoder Re-Ranking                |
-| mcp            | JSON-RPC Tools        | POST/stream | `rag.query`, `rag.ingest`, `rag.update` |
+| Service        | Endpoint              | Methode     | Beschreibung                                     |
+| -------------- | --------------------- | ----------- | ------------------------------------------------ |
+| rag-service    | `/query`              | POST        | Haupt-RAG-Query                                  |
+| rag-service    | `/ingest`             | POST        | Manuelles Ingest                                 |
+| rag-service    | `/update`             | POST        | Re-Ingest/Delta-Update                           |
+| rag-service    | `/git/webhook/{repo}` | POST        | Git-Push-Webhook (optional signiert)             |
+| extractor      | `/extract/pdf`        | POST        | PDF → Markdown                                   |
+| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Markdown-Dateien                   |
+| bot            | `/ask`                | POST        | Intent-Routing + Proxy auf RAG                   |
+| bot            | `/readyz`             | GET         | Readiness, prüft Rasa `/status`                  |
+| bot            | `/metrics`            | GET         | Prometheus-Metriken (Intent/Fallback/Confidence) |
+| reranker (TEI) | `/rerank`             | POST        | Cross-Encoder Re-Ranking                         |
+| mcp            | JSON-RPC Tools        | POST/stream | `rag.query`, `rag.ingest`, `rag.update`          |
 
 ## 3. Datenflüsse
 
@@ -97,9 +105,9 @@ Latenz-Richtwerte (abhängig von Hardware/Modell):
 3. **Automatisches Update:** Ist `auto_update=true` und `RAG_SERVICE_URL` gesetzt, ruft der Dienst `/update` auf (rollen können via `roles`-Formfeld übergeben werden).
 
 ### 3.5 Observability
-1. Collector akzeptiert OTLP (`otel-collector:4317/4318`). RAG-/Bot-/Extractor sind derzeit nicht mit OTEL-SDKs instrumentiert, d. h. es werden ohne Anpassung keine Spans/Metrics gesendet.
+1. Collector akzeptiert OTLP (`otel-collector:4317/4318`). RAG-/Extractor sind derzeit nicht mit OTEL-SDKs instrumentiert; Bot exportiert eigene Prometheus-Metriken (`/metrics`).
 2. Collector exportiert Traces als Logs und Metrics an einen eingebetteten Prometheus-Endpoint (`:9464`); keine Logs nach Prometheus.
-3. Prometheus scraped den Collector alle 15s und stellt Daten Grafana zur Verfügung.
+3. Prometheus scraped den Collector und den Bot alle 15s (`prometheus.yml`), stellt Daten Grafana zur Verfügung.
 
 ## 4. Deployment & Infrastruktur
 
@@ -118,7 +126,7 @@ Latenz-Richtwerte (abhängig von Hardware/Modell):
 - Git-Repos können denselben Arbeitsbereich teilen, Pfade werden automatisch erstellt (`git_workspace_root`).
 - Extractor benötigt `EXTRACT_OUTPUT_DIR` (Default `/data` -> gemountet auf `rag/data`) und optional `RAG_SERVICE_URL`.
 - MCP-Gateway erwartet `RAG_SERVICE_URL` und optional `MCP_TRANSPORT` (Std. `streamable-http`).
-- Bot-Env: `NLU_ENDPOINT`, `RAG_ENDPOINT`, `PORT`.
+- Bot-Env: `NLU_ENDPOINT`, `RAG_ENDPOINT`, `PORT`, `NLU_CONFIDENCE_THRESHOLD` (Default 0.7), `NLU_TIMEOUT_MS`, `NLU_STATUS_TIMEOUT_MS`, `NLU_CACHE_SIZE` (Default 500), `NLU_CACHE_TTL_MS` (Default 300000), `METRICS_PORT` (Default 9100), `METRICS_PATH` (Default `/metrics`).
 
 ## 6. Sicherheit & Compliance
 
