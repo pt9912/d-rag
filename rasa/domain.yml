@@ -1,12 +1,29 @@
-version: '3.1'
+version: "3.1"
+
 intents:
+  - ask_rag
   - greet
-  - ask_graphrag
+  - goodbye
+  - help
+  - thank
+  - out_of_scope
+
+entities:
+  - topic
+  - doc_type
+
 responses:
   utter_greet:
     - text: "Hallo! Wie kann ich helfen?"
-  utter_graphrag:
-    - text: "Frag gerne spezifisch, ich leite die Frage an den RAG-Service weiter."
+  utter_goodbye:
+    - text: "Bis bald!"
+  utter_help:
+    - text: "Ich beantworte Fragen zu deinem Projekt per RAG."
+  utter_thank:
+    - text: "Gerne."
+  utter_out_of_scope:
+    - text: "Ich leite das an die Wissenssuche weiter."
+
 session_config:
   session_expiration_time: 60
   carry_over_slots_to_new_session: true

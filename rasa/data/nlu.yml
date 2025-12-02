@@ -1,12 +1,58 @@
-version: '3.1'
+version: "3.1"
+
 nlu:
+  - intent: ask_rag
+    examples: |
+      - wie deploye ich den rag service?
+      - kannst du mir erklaeren wie die suche funktioniert?
+      - ich brauche infos zur architektur des systems
+      - wo finde ich die api dokumentation?
+      - wie starte ich das projekt lokal?
+      - erklaere mir den extraktor
+      - welche rolle hat qdrant im system?
+      - hast du infos zum [deployment](topic)?
+      - zeig mir eine [faq](doc_type) zu berechtigungen
+      - ich suche eine [anleitung](doc_type) fuer tests
+      - fragen zum [vektorstore](topic) habe ich
+      - gibt es einen leitfaden fuer rag?
+
   - intent: greet
     examples: |
       - hallo
       - hi
       - guten tag
-  - intent: ask_graphrag
+      - moin
+      - guten morgen
+      - servus
+
+  - intent: goodbye
     examples: |
-      - was ist graphrag?
-      - erkläre graphrag
-      - wie funktioniert graphrag
+      - tschues
+      - bis spaeter
+      - auf wiedersehen
+      - machs gut
+      - wir hoeren uns
+
+  - intent: help
+    examples: |
+      - was kannst du?
+      - wie arbeitest du?
+      - welche infos brauchst du von mir?
+      - wie hilft mir der bot?
+      - was sind deine faehigkeiten?
+
+  - intent: thank
+    examples: |
+      - danke
+      - vielen dank
+      - super, danke dir
+      - merci
+      - passt so, danke
+
+  - intent: out_of_scope
+    examples: |
+      - erzaehle einen witz
+      - wie ist das wetter heute?
+      - spiel musik
+      - wie hoch ist der eiffelturm?
+      - bestell mir eine pizza
