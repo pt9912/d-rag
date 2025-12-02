@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+__pypackages__/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Umgebungen
+.env
+.env.*
+*.env
+
+# Generierte Daten/Repos
+git-workspace/
+!git-workspace/.gitkeep
+rag/data/*
+!rag/data/demo.md
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
