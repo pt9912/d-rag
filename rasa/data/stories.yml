@@ -10,6 +10,10 @@ stories:
       - slot_was_set:
           - topic: deployment
           - doc_type: faq
+      - action: rag_form
+      - active_loop: rag_form
+      - action: rag_form
+      - active_loop: null
       - action: action_query_rag
 
   - story: Slot-Filling fuer RAG
@@ -31,12 +35,4 @@ stories:
           - doc_type: adr
       - action: rag_form
       - active_loop: null
-      - action: action_query_rag
-
-  - story: Nachfrage mit History
-    steps:
-      - intent: ask_rag
-      - action: action_query_rag
-      - intent: ask_rag
-        user: "Erzaehl mehr dazu"
       - action: action_query_rag

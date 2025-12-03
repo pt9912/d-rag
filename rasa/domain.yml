@@ -102,6 +102,7 @@ forms:
     required_slots:
       - topic
       - doc_type
+      - roles
 
 actions:
   - action_query_rag

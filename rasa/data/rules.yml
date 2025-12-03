@@ -11,6 +11,7 @@ rules:
       - intent: goodbye
       - action: utter_goodbye
       - action: action_reset_context
+      - active_loop: null
 
   - rule: Danke
     steps:
@@ -54,3 +55,17 @@ rules:
       - action: utter_cancel
       - action: action_reset_context
       - active_loop: null
+
+  - rule: Rolle liefern waehrend Form
+    condition:
+      - active_loop: rag_form
+    steps:
+      - intent: provide_role
+      - action: rag_form
+
+  - rule: Bestaetigung waehrend Form
+    condition:
+      - active_loop: rag_form
+    steps:
+      - intent: affirm
+      - action: rag_form
