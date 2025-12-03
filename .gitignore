@@ -38,3 +38,6 @@ rasa/.rasa
 rasa/.config
 rasa/.keras
 rasa/models/*.tar.gz
+
+#grok
+.grok/
