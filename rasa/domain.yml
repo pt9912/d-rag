@@ -2,15 +2,76 @@ version: "3.1"
 
 intents:
   - ask_rag
+  - provide_topic
+  - provide_doc_type
+  - provide_role
+  - affirm
+  - deny
   - greet
   - goodbye
   - help
   - thank
   - out_of_scope
+  - nlu_fallback
 
 entities:
   - topic
   - doc_type
+  - role
+  - name
+
+slots:
+  topic:
+    type: text
+    influence_conversation: true
+    mappings:
+      - type: from_entity
+        entity: topic
+      - type: from_text
+        conditions:
+          - active_loop: rag_form
+            requested_slot: topic
+  doc_type:
+    type: text
+    influence_conversation: true
+    mappings:
+      - type: from_entity
+        entity: doc_type
+      - type: from_text
+        conditions:
+          - active_loop: rag_form
+            requested_slot: doc_type
+  roles:
+    type: list
+    influence_conversation: true
+    mappings:
+      - type: from_entity
+        entity: role
+      - type: from_text
+        conditions:
+          - active_loop: rag_form
+            requested_slot: roles
+  last_answer:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: custom
+  conversation_history:
+    type: list
+    influence_conversation: false
+    mappings:
+      - type: custom
+  pending_clarification:
+    type: bool
+    influence_conversation: true
+    initial_value: false
+    mappings:
+      - type: custom
+  expected_slot:
+    type: text
+    influence_conversation: true
+    mappings:
+      - type: custom
 
 responses:
   utter_greet:
@@ -23,6 +84,30 @@ responses:
     - text: "Gerne."
   utter_out_of_scope:
     - text: "Ich leite das an die Wissenssuche weiter."
+  utter_ask_rephrase:
+    - text: "Das habe ich nicht verstanden. Kannst du das bitte anders formulieren?"
+  utter_rag_unavailable:
+    - text: "Der Wissensservice ist gerade nicht erreichbar. Bitte versuch es gleich noch einmal."
+  utter_cancel:
+    - text: "Alles klar, ich breche ab. Lass mich wissen, falls du doch weitermachen willst."
+  utter_ask_topic:
+    - text: "Worum geht es genau? Zum Beispiel 'Deployment', 'Architektur' oder 'Tests'."
+  utter_ask_doc_type:
+    - text: "Welche Dokumentenart suchst du? Zum Beispiel 'ADR', 'FAQ' oder 'Anleitung'."
+  utter_ask_roles:
+    - text: "Gibt es Rollen, die ich berücksichtigen soll (z. B. 'dev', 'admin')?"
+
+forms:
+  rag_form:
+    required_slots:
+      - topic
+      - doc_type
+
+actions:
+  - action_query_rag
+  - validate_rag_form
+  - action_reset_context
+  - action_acknowledge_clarification
 
 session_config:
   session_expiration_time: 60
