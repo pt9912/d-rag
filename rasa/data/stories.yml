@@ -1,0 +1,42 @@
+version: "3.1"
+
+stories:
+  - story: Happy Path mit Entities
+    steps:
+      - intent: ask_rag
+        entities:
+          - topic: deployment
+          - doc_type: faq
+      - slot_was_set:
+          - topic: deployment
+          - doc_type: faq
+      - action: action_query_rag
+
+  - story: Slot-Filling fuer RAG
+    steps:
+      - intent: ask_rag
+      - action: rag_form
+      - active_loop: rag_form
+      - intent: provide_topic
+        entities:
+          - topic: architektur
+      - slot_was_set:
+          - topic: architektur
+      - action: rag_form
+      - active_loop: rag_form
+      - intent: provide_doc_type
+        entities:
+          - doc_type: adr
+      - slot_was_set:
+          - doc_type: adr
+      - action: rag_form
+      - active_loop: null
+      - action: action_query_rag
+
+  - story: Nachfrage mit History
+    steps:
+      - intent: ask_rag
+      - action: action_query_rag
+      - intent: ask_rag
+        user: "Erzaehl mehr dazu"
+      - action: action_query_rag

@@ -15,6 +15,9 @@ nlu:
       - ich suche eine [anleitung](doc_type) fuer tests
       - fragen zum [vektorstore](topic) habe ich
       - gibt es einen leitfaden fuer rag?
+      - was steht in den [adrs](doc_type) zum [retrieval](topic)?
+      - hast du eine zusammenfassung zu [monitoring](topic)?
+      - ich brauche hintergrund zu [rollenrechten](topic)
 
   - intent: greet
     examples: |
@@ -56,3 +59,45 @@ nlu:
       - spiel musik
       - wie hoch ist der eiffelturm?
       - bestell mir eine pizza
+      - erzähl mir was ueber das wetter
+
+  - intent: affirm
+    examples: |
+      - ja
+      - genau
+      - klingt gut
+      - passt
+      - richtig
+
+  - intent: deny
+    examples: |
+      - nein
+      - nicht wirklich
+      - lieber nicht
+      - das passt nicht
+      - stop
+
+  - intent: provide_topic
+    examples: |
+      - [deployment](topic)
+      - es geht um [architektur](topic)
+      - thema ist [monitoring](topic)
+      - [rollen](topic) und berechtigungen
+      - [tests](topic)
+      - [vektorstore](topic)
+
+  - intent: provide_doc_type
+    examples: |
+      - eine [anleitung](doc_type)
+      - [adr](doc_type)
+      - [faq](doc_type)
+      - [leitfaden](doc_type)
+      - [howto](doc_type)
+
+  - intent: provide_role
+    examples: |
+      - ich bin [admin](role)
+      - als [dev](role) brauche ich das
+      - [ops](role)
+      - [product](role)
+      - nutzerrolle ist [tester](role)
