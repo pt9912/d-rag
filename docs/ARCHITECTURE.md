@@ -1,6 +1,6 @@
 # Architektur des lokalen RAG-Stacks
 
-Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostacks unter `docker-compose.yml`. Ziel ist, schnell zu erkennen, welche Dienste beteiligt sind, wie sie interagieren und welche Erweiterungspunkte bzw. Betriebsaspekte zu beachten sind. Der Bot nutzt Rasa als Intent-only NLU, routet statische Intents direkt und leitet Fallbacks an den RAG-Service weiter.
+Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostacks unter `docker-compose.yml`. Ziel ist, schnell zu erkennen, welche Dienste beteiligt sind, wie sie interagieren und welche Erweiterungspunkte bzw. Betriebsaspekte zu beachten sind. Der Stack nutzt Rasa als dialogfähigen Orchestrator (Slots, Forms, Policies, Custom Actions) mit Action-Server; der Node-Bot kann als dünner Proxy weiterverwendet werden.
 
 ## 1. Überblick & Ziele
 
@@ -19,18 +19,23 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
                             │                   └─────┬────┴──────┬───────┘
                             │                         │           │
                             │          ┌──────────────▼───────────▼────────┐
-                            └--------->│ Rasa NLU (model/parse)            │
+                            └--------->│ Rasa Core + Action-Server         │
                                        └───────────────────────────────────┘
-                                           │
-                                           │ re-routed Intents / Fallbacks
-                                           │
-                             ┌─────────────▼────────────┐
-                             │ Reranker (TEI Cross-Enc) │
-                             └─────────────┬────────────┘
-                                           │
-                                 ┌─────────▼────────┐
-                                 │ Ollama LLM       │
-                                 └──────────────────┘
+                                             │
+                                             │ Custom Action: /query (RAG)
+                                             │
+                             ┌───────────────▼─────────────┐
+                             │ RAG-Service (Retrieval +    │
+                             │ Ollama/Reranker/Qdrant)     │
+                             └───────────────┬─────────────┘
+                                             │
+                             ┌───────────────▼─────────────┐
+                             │ Reranker (TEI Cross-Enc)    │
+                             └───────────────┬─────────────┘
+                                             │
+                                   ┌─────────▼────────┐
+                                   │ Ollama LLM       │
+                                   └──────────────────┘
              ┌────────────────────┐
              │ Doc Extractor      │
              └─────────┬──────────┘
@@ -43,17 +48,18 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 
 ## 2. Komponenten & Verantwortlichkeiten
 
-| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`).                                                                                                        |
-| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                                                                                                                                  |
-| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                                                                                                                                   |
-| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                                                                                                                         |
-| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                                                                                                                                |
-| `bot`                                     | Express (Node 20)               | Intent-basiertes Routing (`bot/src/index.js`): ruft Rasa `/model/parse`, sendet `ask_rag`, Fallbacks (`nlu_fallback`, `out_of_scope`, Confidence < Threshold) an den RAG-Service, beantwortet statische Intents (`greet`, `help`, `goodbye`, `thank`) direkt. LRU-Cache für NLU, Prometheus-Metriken `/metrics`, Readiness `/readyz` prüft Rasa `/status`. |
-| `rasa`                                    | Rasa 3.6.21                     | Intent-only NLU (Deutsch) mit DIETClassifier, FallbackClassifier, Entities `topic`/`doc_type`. Training erzeugt Modelle in `rasa/models`; der Bot konsumiert `/model/parse`.                                                                                                                                                                               |
-| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                                                                                                                         |
-| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                                                                                                                              |
+| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                             |
+| ----------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`). |
+| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                           |
+| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                            |
+| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                  |
+| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                         |
+| `bot`                                     | Express (Node 20)               | Optionaler Proxy zu Rasa `/webhooks/rest/webhook` und zum RAG-Service; kann statische Antworten liefern und Header (z. B. Rollen) weitergeben. Für Dialogmanagement übernimmt primär Rasa.                                                          |
+| `rasa`                                    | Rasa 3.6.21                     | Dialog-Engine (Deutsch) mit Slots, Forms, Policies (Rule/Memoization/TED) und FallbackClassifier. REST-Endpoint `/webhooks/rest/webhook`.                                                                                                           |
+| `action-server`                           | rasa-sdk 3.6                    | Custom Actions: `action_query_rag` ruft RAG `/query` mit Slots/History/Rollen, trimmt History; Form-Validierung; Kontext-Reset; Prometheus-Metriken `/metrics` (Port 8001).                                                                         |
+| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                  |
+| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                       |
 
 ### 2.1 Wichtige Endpunkte
 
@@ -74,12 +80,18 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 ## 3. Datenflüsse
 
 ### 3.1 Query Flow
-1. **Eingang:** Bot, MCP oder direkter REST-Client ruft `POST /query` am RAG-Service auf. Rollen (`roles`) begrenzen sichtbare Dokumente.
-2. **Embedding:** `RAGPipeline.answer` erzeugt Embeddings über `OllamaClient.embed`.
-3. **Retrieval:** `VectorStore.search` ruft Qdrant mit optionalem Rollen-Filter (`MatchAny`) auf und gibt Top-N Kandidaten zurück (`Settings.reranker_initial_k`, default 20).
-4. **Re-Ranking:** `RerankerClient.rerank` sendet Query und Kandidaten an den TEI-Service (Cross-Encoder, kein Bi-Encoder). Pro Kandidat läuft ein vollständiger Forward-Pass über Query+Dokument, es entsteht ein unnormalisierter Similarity-Score; Sortierung erfolgt absteigend. Kosten wachsen linear mit K, daher `reranker_initial_k` klein halten und `max_context_chunks` hart begrenzen.
-5. **Generierung:** Prompt wird mit den re-gerankten Kontexten angereichert und per `OllamaClient.generate` beantwortet.
-6. **Antwort:** JSON: `{ answer, contexts }`. Kontexte enthalten optional `rerank_score`. Bot reicht es ungefiltert weiter, MCP stellt Antwort + Kontextliste als `TextContent` bereit.
+1. **Eingang:** Client (oder Bot als Proxy) ruft `POST /webhooks/rest/webhook` am Rasa-Service auf.
+2. **NLU/Core:** Rasa erkennt Intent/Entities, füllt Slots/Forms (`rag_form` für `topic`/`doc_type`/`roles`) und wählt per Policies die Custom Action.
+3. **Custom Action:** `action_query_rag` baut Payload `{question, topic?, doc_type?, roles?, history?}` und ruft `POST {RAG_ENDPOINT}/query` mit Timeout/Retry. History wird auf 3–5 QA-Paare getrimmt.
+4. **RAG-Service:** `RAGPipeline.answer` erzeugt Embeddings, sucht in Qdrant, rerankt, generiert Antwort über Ollama.
+5. **Antwort:** Rasa sendet Liste von Messages zurück (REST-Webchat-Format), die der Bot optional 1:1 weiterreicht. History/Slots werden im Tracker aktualisiert.
+
+Latenz-Richtwerte (abhängig von Hardware/Modell):
+- Rasa-NLU/Core: typ. <100 ms bei kleinen Modellen und kurzen Verläufen
+- Embedding (Ollama): ca. 10–20 ms pro Chunk
+- Qdrant-Suche: ca. 1–5 ms
+- Reranker (Cross-Encoder): ca. 50–200 ms * K
+- LLM-Antwort: ca. 100–1500 ms je nach Promptumfang
 
 Latenz-Richtwerte (abhängig von Hardware/Modell):
 - Embedding (Ollama): ca. 10–20 ms pro Chunk
@@ -114,9 +126,9 @@ Latenz-Richtwerte (abhängig von Hardware/Modell):
 - **Netz:** Compose erstellt Default-Netzwerk, so dass Services via DNS (`rag-service`, `qdrant`, `ollama`, …) erreichbar sind.
 - **Persistenz:** Textdaten liegen im Workspace (`rag/data`). Qdrant-, Ollama- und Reranker-Volumes sichern Vektoren/Modelle zwischen Container-Neustarts.
 - **Build-/Startbefehle:** Python-Services installieren Abhängigkeiten bei jedem Start (`pip install .`). Bot installiert npm-Dependencies on-the-fly (Trade-off zwischen Einfachheit und Startzeit).
-- **Ports:** Standard-Ports werden extern gemappt (8000 FastAPI, 8082 Reranker, 8100 Extractor, 8800 MCP, 3978 Bot, 5005 Rasa, 11434 Ollama, 6333 Qdrant, 9090 Prometheus, 3000 Grafana).
+- **Ports:** Standard-Ports werden extern gemappt (8000 FastAPI, 8082 Reranker, 8100 Extractor, 8800 MCP, 3978 Bot, 5005 Rasa, 5055 Action-Server, 8001 Metrics Action-Server, 11434 Ollama, 6333 Qdrant, 9090 Prometheus, 3000 Grafana).
 - **Qdrant-Parameter:** Collection wird beim ersten Ingest mit `vector_size=768` (Default `nomic-embed-text`) und Distanz `cosine` angelegt; Einbettungsmodell und Collection müssen zusammenpassen.
-- **Access Control:** RAG-Endpunkte sind nicht geschützt; nur Git-Webhook erwartet Signatur (`Settings.webhook_secret`). Rollen-basierte Filter sind ausschließlich logischer Natur (Trennung durch Metadaten).
+- **Access Control:** RAG-Endpunkte sind nicht geschützt; nur Git-Webhook erwartet Signatur (`Settings.webhook_secret`). Rasa/Action-Server liefern keine Auth; Rollen-basierte Filter sind ausschließlich logischer Natur (Trennung durch Metadaten).
 
 ## 5. Konfiguration & Secrets
 
@@ -137,20 +149,21 @@ Latenz-Richtwerte (abhängig von Hardware/Modell):
 
 ## 7. Betrieb & Erweiterbarkeit
 
-- **Monitoring:** Prüfe `docker compose logs <service>` für Troubleshooting. Qdrant-Dashboard unter `localhost:6333/dashboard`.
-- **Skalierung:** Compose-Setup ist für Ein-Knoten-Entwicklung gedacht. RAG-Service ist stateless und kann horizontal skaliert werden; Qdrant ist clusterfähig, TEI-Reranker lässt sich replizieren, bleibt aber CPU-intensiv. Ollama skaliert nicht horizontal (Single-Process), bräuchte externes LLM/Embeddings für mehr Durchsatz. Für Produktion müssten Qdrant/Ollama extern betrieben, Secrets sicher verwaltet und AuthN/AuthZ ergänzt werden.
-- **RAG-Erweiterungen:** 
-  - Weitere Dokumentquellen können über zusätzliche Endpunkte oder Tools angebunden werden (z. B. S3-Loader).
-  - Chunking-/Embedding-Strategien lassen sich zentral im `RAGPipeline` bzw. `Settings` anpassen.
-  - Bot kann Rasa-Intents auswerten und kontextuell entscheiden, ob/wie RAG angefragt wird.
-  - MCP-Gateway lässt sich durch neue Tools erweitern (z. B. `rag.delete`), indem weitere `@server.tool`-Funktionen ergänzt werden.
+- **Monitoring:** `docker compose logs <service>` für Troubleshooting; Qdrant-Dashboard unter `localhost:6333/dashboard`. Prometheus scrapt Bot (`/metrics`) und Action-Server (`:8001/metrics`), RAG selbst liefert keine Prometheus-Metriken.
+- **Training/Tests:** Rasa train/test per `docker compose run --rm rasa train` und `rasa test nlu/core`; Actions per `pytest` in `rasa/actions/tests`. E2E-REST-Sequenzen gegen `/webhooks/rest/webhook` ergänzen.
+- **Betrieb Rasa:** Rasa benötigt laufenden Action-Server (`5055`) für Custom Actions. Default-Tracker ist In-Memory; für skalierte Setups Redis o. ä. als Tracker-Store konfigurieren. `endpoints.yml` zeigt auf `http://action-server:5055/webhook`.
+- **Skalierung:** Compose-Setup ist für Ein-Knoten-Entwicklung gedacht. RAG-Service und Action-Server sind stateless und horizontal skalierbar; Qdrant ist clusterfähig; TEI-Reranker replizierbar, aber CPU-intensiv; Rasa skaliert nur mit gemeinsamem Tracker-Store. Ollama skaliert nicht horizontal (Single-Process); für mehr Durchsatz externes LLM/Embeddings nutzen. In Produktion AuthN/AuthZ und Secret-Handling ergänzen.
+- **Erweiterungen:** 
+  - Weitere Dokumentquellen über zusätzliche Endpunkte/Loader (z. B. S3) anbinden.
+  - Rasa: neue Intents/Slots/Stories per `domain.yml`/`data/*.yml` und Actions ergänzen.
+  - MCP-Gateway um neue Tools erweitern (z. B. `rag.delete`) durch zusätzliche `@server.tool`-Funktionen.
 
 ## 8. Bekannte Einschränkungen
 
 - Ingest-Zeit steigt linear mit Dokumentgröße; es gibt keine Hintergrund-Jobs oder Warteschlangen – alle Operationen laufen synchron innerhalb der HTTP-Requests.
-- Keine dedizierte Authentifizierung oder Rate-Limits an den REST-Endpunkten.
-- Observability ist rudimentär (Logging-Exporter), da RAG-/Extractor-Services keine OTLP-Instrumentierung enthalten.
-- Bot und Rasa dienen als Referenz; Produktionsfeatures wie Konversationserhalt oder Multi-Role-Handling fehlen bewusst.
+- Keine dedizierte Authentifizierung oder Rate-Limits an den REST-Endpunkten (Rasa/Action-Server/RAG). Rollen wirken nur als Metadaten-Filter in Qdrant.
+- Observability: RAG-/Extractor-Services haben keine OTLP-Instrumentierung und keine Prometheus-Metriken; Action-Server liefert nur Counters, keine Latenzen. End-to-End-Tracing fehlt.
+- Bot/Rasa sind Referenzimplementierungen; Tracker-Store ist In-Memory, daher kein Shared-State bei Skalierung und kein Persistenz-Backup. Multi-Role-Handling erfolgt nur über Slots/Metadaten.
 - Reranker läuft als Cross-Encoder im CPU-Image, skaliert linear mit K, kein Batch über Paare; großes Modell (≈2,2 GB) verursacht längeren Cold-Start, `max_batch_requests` wird vom Dienst automatisch reduziert und GPU-Deployments bringen deutliche Vorteile.
 
 Dieses Dokument soll als Einstieg dienen. Für detaillierte Implementierungsdetails siehe die jeweils referenzierten Dateien (`rag/app/*.py`, `extractor/app/main.py`, `mcp/app/main.py`, `bot/src/index.js`, Compose-File).

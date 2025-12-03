@@ -1,16 +1,17 @@
 # Lokales RAG-Setup
 
-Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express), Rasa als Intent-only NLU, Observability-Komponenten (OTel Collector, Prometheus, Grafana) sowie einen lokalen RAG-Service mit Qdrant und Ollama startet. Hinweis: Die Applikationen senden ohne zusätzliche OTEL-Traces/Metriken; Prometheus sammelt aktuell nur die Bot-Metriken (`/metrics`).
+Dieses Verzeichnis enthält einen Docker-Compose-Stack mit Rasa (Dialogmanagement mit Slots/Forms/Policies), Action-Server, optionalem Bot (Express als Proxy), Observability-Komponenten (OTel Collector, Prometheus, Grafana) sowie einem lokalen RAG-Service mit Qdrant und Ollama. Hinweis: RAG/Extractor sind nicht OTEL-instrumentiert; Prometheus sammelt aktuell Bot- und Action-Server-Metriken (`/metrics`).
 (MAF: https://github.com/microsoft/Agent-Framework-Samples/tree/main/06.RAGs)
 
 ## Aufbau
 
-- `docker-compose.yml`: startet alle Services inkl. Bot, Rasa, Qdrant, Ollama, Reranker und dem FastAPI-RAG-Service.
+- `docker-compose.yml`: startet alle Services inkl. Bot (optional als Proxy), Rasa, Action-Server, Qdrant, Ollama, Reranker und dem FastAPI-RAG-Service.
 - `rag/`: FastAPI-App, die Dokumente in Qdrant ingestiert (Chunking + Embeddings per Ollama), per BGE-Reranker re-rankt und Anfragen beantwortet.
 - `extractor/`: FastAPI-Dienst zur PDF-Extraktion und optionalem Triggern des RAG-Updates.
 - `mcp/`: JSON-RPC-Gateway (Model Context Protocol) für Tools wie `rag.query`, `rag.ingest`, `rag.update`.
-- `bot/`: Express-Bot mit Intent-Routing via Rasa NLU. Statische Intents (`greet`, `help`, `goodbye`, `thank`) werden direkt beantwortet, `ask_rag` und Fallbacks (`nlu_fallback`, `out_of_scope`, niedrige Confidence) werden an den RAG-Service weitergeleitet. Metriken auf Port 9100 (`/metrics`), Readiness `/readyz` prüft Rasa `/status`.
-- `rasa/`: Intent-only NLU-Projekt (Deutsch) mit DIET-Classifier, FallbackClassifier und Entities `topic`, `doc_type`. Training über `rasa train` erzeugt Modelle in `rasa/models`.
+- `bot/`: Express-Bot als Proxy zu Rasa `/webhooks/rest/webhook` und RAG. Kann statische Antworten liefern und Rollen-Header weitergeben. Metriken auf Port 9100 (`/metrics`), Readiness `/readyz` prüft Rasa `/status`.
+- `rasa/`: Dialog-Projekt (Deutsch) mit Slots/Forms/Policies (Rule/Memoization/TED) und FallbackClassifier. Training über `rasa train` erzeugt Modelle in `rasa/models`.
+- `rasa/actions`: Action-Server mit Custom Actions (`action_query_rag`, Form-Validierung, Kontext-Reset), Prometheus-Counter auf Port 8001.
 - `otel-collector-config.yaml`, `prometheus.yml`: Minimal-Configs für Observability (Prometheus scraped Collector und Bot).
 
 ## Nutzung
@@ -35,15 +36,26 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express),
    ```
    Der RAG-Service ingestiert beim Start automatisch `rag/data/demo.md`.
 
-4. **Bot-Route testen**:
-   - Die Route `POST /ask` ruft erst Rasa `/model/parse` auf, routet je nach Intent und fragt in der Regel den RAG-Service `http://rag-service:8000/query` an (Fallback bei niedriger Confidence oder `out_of_scope`).
-   - Sobald die Ports nach außen erreichbar sind:
-     ```bash
-     curl -X POST localhost:3978/ask \
-          -H "Content-Type: application/json" \
-          -d '{"question":"What is GraphRAG?","roles":["public"]}' | jq
-     ```
-     Rollen können alternativ auch per Header übergeben werden: `-H "X-Roles: public,internal"`.
+4. **Dialog-Route testen (Rasa REST)**:
+   ```bash
+   curl -X POST http://localhost:5005/webhooks/rest/webhook \
+        -H "Content-Type: application/json" \
+        -d '{"sender":"user1","message":"Welche Policies nutzt ihr fuer Rasa?"}' | jq
+   ```
+   Slot-Filling-Beispiel:
+   ```bash
+   curl -X POST http://localhost:5005/webhooks/rest/webhook \
+        -H "Content-Type: application/json" \
+        -d '{"sender":"user1","message":"Erzaehl mir was zu RAG"}' | jq
+   ```
+   Folge-Requests mit demselben `sender` nutzen Slots/History.
+
+   Optional: Bot-Proxy (`/ask`) kann weiter genutzt werden, leitet Requests an Rasa weiter und beantwortet statische Intents. Beispiel:
+   ```bash
+   curl -X POST localhost:3978/ask \
+        -H "Content-Type: application/json" \
+        -d '{"question":"Was ist RAG?"}' | jq
+   ```
 
 5. **Eigene Dokumente & Updates**:
    - Dateien nach `rag/data/` legen (oder einen anderen Pfad wählen) und per
@@ -71,7 +83,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express),
      ```
      Nur Dokumente, deren Rollenliste sich mit der Anfrage überschneidet, werden als Kontext genutzt.
 
-5. **PDFs extrahieren**:
+6. **PDFs extrahieren**:
    - Der neue Dienst läuft auf Port 8100.
    - Beispiel-Upload mit automatischem RAG-Update:
      ```bash
@@ -91,7 +103,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express),
      ```
      Jede PDF im Archiv wird extrahiert und – falls aktiviert – direkt aktualisiert.
 
-6. **Alte Daten entfernen**:
+7. **Alte Daten entfernen**:
    - Ganze Collection löschen und frisch befüllen:
      ```bash
      curl -X DELETE http://localhost:6333/collections/demo_documents
@@ -105,7 +117,7 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express),
      ```
      Anschließend die aktualisierte Datei erneut ingestieren.
 
-7. **MCP-Gateway (JSON-RPC) nutzen**:
+8. **MCP-Gateway (JSON-RPC) nutzen**:
    - Der Dienst läuft auf Port 8800 und akzeptiert JSON-RPC-Anfragen auf `/mcp`.
    - Tools auflisten:
      ```bash
@@ -125,6 +137,8 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack, der einen Bot (Express),
 
 - `rag-service`-Logs kontrollierst du mit `docker compose logs rag-service`.
 - Extraktor-Logs: `docker compose logs extractor`.
+- Action-Server: `docker compose logs action-server` (Prometheus unter `http://localhost:8001/metrics`).
+- Rasa: `docker compose logs rasa`.
 - MCP-Gateway: `docker compose logs mcp`.
 - Reranker-Logs: `docker compose logs reranker`.
 - Der Qdrant-Dashboard ist über `http://localhost:6333/dashboard` erreichbar.
