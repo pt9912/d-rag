@@ -1,7 +1,12 @@
 # Lokales RAG-Setup
 
 Dieses Verzeichnis enthält einen Docker-Compose-Stack mit Rasa (Dialogmanagement mit Slots/Forms/Policies), Action-Server, optionalem Bot (Express als Proxy), Observability-Komponenten (OTel Collector, Prometheus, Grafana) sowie einem lokalen RAG-Service mit Qdrant und Ollama. Hinweis: RAG/Extractor sind nicht OTEL-instrumentiert; Prometheus sammelt aktuell Bot- und Action-Server-Metriken (`/metrics`).
-(MAF: https://github.com/microsoft/Agent-Framework-Samples/tree/main/06.RAGs)
+
+## Voraussetzungen
+
+*   **Docker** & **Docker Compose** (Plugin version `docker compose` empfohlen)
+*   **curl** & **jq** (für die Beispiel-Befehle in diesem Readme)
+*   **Nvidia Container Toolkit** (optional, falls GPU-Beschleunigung für Ollama gewünscht ist)
 
 ## Aufbau
 
@@ -13,6 +18,13 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack mit Rasa (Dialogmanagemen
 - `rasa/`: Dialog-Projekt (Deutsch) mit Slots/Forms/Policies (Rule/Memoization/TED) und FallbackClassifier. Training über `rasa train` erzeugt Modelle in `rasa/models`.
 - `rasa/actions`: Action-Server mit Custom Actions (`action_query_rag`, Form-Validierung, Kontext-Reset), Prometheus-Counter auf Port 8001.
 - `otel-collector-config.yaml`, `prometheus.yml`: Minimal-Configs für Observability (Prometheus scraped Collector und Bot).
+
+## Dokumentation
+
+Detaillierte Informationen finden sich im `docs/` Verzeichnis:
+- [Architektur & Design](docs/ARCHITECTURE.md): Gesamtsystem-Überblick und Diagramme.
+- [Kubernetes Deployment](docs/KUBERNETES.md): Produktions-Guide für K8s (Helm + Kustomize).
+- [Daten-Plan](docs/data-plan.md): Strategie für Dokumenten-Ingest und Verwaltung.
 
 ## Nutzung
 
