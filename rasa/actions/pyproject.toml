@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rasa-actions"
+version = "0.1.0"
+description = "Custom actions for Rasa dialog management."
+requires-python = ">=3.9"
+dependencies = [
+  "httpx==0.27.0",
+  "prometheus-client==0.20.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["actions*"]
