@@ -41,23 +41,22 @@ services:
       - action-server
 
   action-server:
-    image: rasa/rasa-sdk:3.6.2
+    image: rasa/rasa:3.6.21-full
     container_name: action-server
-    working_dir: /app
-    command:
-      - bash
-      - -lc
-      - >
-        pip install --no-cache-dir ./actions &&
-        rasa run actions --port 5055 --actions actions.actions
+    user: "1000:1000"
+    working_dir: /actions
+    entrypoint: ["/actions/entrypoint.sh"]
     volumes:
-      - ./rasa/actions:/app/actions
+      - ./rasa/actions:/actions
     environment:
       - RAG_ENDPOINT=http://rag-service:8000
       - RAG_TIMEOUT_SECONDS=5
       - RAG_RETRIES=1
       - RAG_HISTORY_LIMIT=5
       - METRICS_PORT=8001
+      - XDG_CONFIG_HOME=/tmp/.config
+      - HOME=/tmp
+      - RASA_TELEMETRY_ENABLED=false
     ports:
       - "5055:5055"
       - "8001:8001"
