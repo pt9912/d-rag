@@ -29,12 +29,40 @@ services:
       - --enable-api
       - --cors
       - "*"
+      - --endpoints
+      - endpoints.yml
     ports:
       - "5005:5005"
     volumes:
       - ./rasa:/app
     environment:
       - RASA_TELEMETRY_ENABLED=false
+    depends_on:
+      - action-server
+
+  action-server:
+    image: rasa/rasa-sdk:3.6.2
+    container_name: action-server
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - >
+        pip install --no-cache-dir ./actions &&
+        rasa run actions --port 5055 --actions actions.actions
+    volumes:
+      - ./rasa/actions:/app/actions
+    environment:
+      - RAG_ENDPOINT=http://rag-service:8000
+      - RAG_TIMEOUT_SECONDS=5
+      - RAG_RETRIES=1
+      - RAG_HISTORY_LIMIT=5
+      - METRICS_PORT=8001
+    ports:
+      - "5055:5055"
+      - "8001:8001"
+    depends_on:
+      - rag-service
 
   otel-collector:
     image: otel/opentelemetry-collector:0.104.0
