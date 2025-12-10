@@ -12,7 +12,8 @@ Dieses Verzeichnis enthält einen Docker-Compose-Stack mit Rasa (Dialogmanagemen
 
 - `docker-compose.yml`: startet alle Services inkl. Bot (optional als Proxy), Rasa, Action-Server, Qdrant, Ollama, Reranker und dem FastAPI-RAG-Service.
 - `rag/`: FastAPI-App, die Dokumente in Qdrant ingestiert (Chunking + Embeddings per Ollama), per BGE-Reranker re-rankt und Anfragen beantwortet.
-- `extractor/`: FastAPI-Dienst zur PDF-Extraktion und optionalem Triggern des RAG-Updates.
+- `extractor/`: FastAPI-Dienst zur Dokumentenextraktion (PDF, ZIP, Aggregiertes Markdown) und optionalem Triggern des RAG-Updates.
+- `tools/`: Hilfsskripte, u.a. `projekt_aggregator.py` zur Projekt-Aggregation.
 - `mcp/`: JSON-RPC-Gateway (Model Context Protocol) für Tools wie `rag.query`, `rag.ingest`, `rag.update`.
 - `bot/`: Express-Bot als Proxy zu Rasa `/webhooks/rest/webhook` und RAG. Kann statische Antworten liefern und Rollen-Header weitergeben. Metriken auf Port 9100 (`/metrics`), Readiness `/readyz` prüft Rasa `/status`.
 - `rasa/`: Dialog-Projekt (Deutsch) mit Slots/Forms/Policies (Rule/Memoization/TED) und FallbackClassifier. Training über `rasa train` erzeugt Modelle in `rasa/models`.
@@ -106,16 +107,91 @@ Detaillierte Informationen finden sich im `docs/` Verzeichnis:
           -F "auto_update=true" | jq
      ```
      Das extrahierte Markdown landet in `rag/data/graph-faq.md` und `/update` wird im Erfolgsfall automatisch aufgerufen. Ohne `auto_update=true` kannst du den Pfad anschließend manuell ingestieren.
-   - ZIP-Support (`/extract/zip`): mehrere PDFs gebündelt hochladen.
+   - ZIP-Support (`/extract/zip`): mehrere Dateien gebündelt hochladen. Unterstützte Formate: `.pdf`, `.md`, `.markdown`, `.txt`.
      ```bash
      curl -X POST http://localhost:8100/extract/zip \
           -F "file=@/pfad/zu/dokumente.zip" \
           -F "roles=public" \
           -F "auto_update=true" | jq
      ```
-     Jede PDF im Archiv wird extrahiert und – falls aktiviert – direkt aktualisiert.
+     Jede unterstützte Datei im Archiv wird extrahiert und – falls aktiviert – direkt aktualisiert.
 
-7. **Alte Daten entfernen**:
+7. **Projekt-Wissensarchiv (Aggregiertes Markdown)**:
+
+   Der Stack unterstützt ein spezielles Format für komplette Projekte (Lastenheft, Pflichtenheft, Architektur, Code):
+
+   **a) Projekt aggregieren** (im Projektverzeichnis ausführen):
+   ```bash
+   # Mit Python
+   python3 tools/projekt_aggregator.py --output mein_projekt.md
+
+   # Mit Projektbeschreibung aus Datei
+   python3 tools/projekt_aggregator.py --output mein_projekt.md --description @beschreibung.txt
+
+   # Oder mit Docker
+   docker build -t projekt-aggregator ./tools
+   docker run --rm -v $(pwd):/project projekt-aggregator --output mein_projekt.md
+
+   # Mit Projektbeschreibung aus Datei (Docker)
+   docker run --rm -v $(pwd):/project projekt-aggregator --output mein_projekt.md --description @beschreibung.txt
+
+   # Mit Projektbeschreibung aus externem Verzeichnis (Docker)
+   docker run --rm -v $(pwd):/project -v ~/templates:/config projekt-aggregator --description @/config/beschreibung.txt
+
+   # Ausgabe nach stdout (für Pipes oder Umleitungen)
+   docker run --rm -v $(pwd):/project projekt-aggregator --output - > mein_projekt.md
+   ```
+   Das Skript erzeugt eine Markdown-Datei mit Verzeichnisstruktur, Projektbeschreibung und allen Dateiinhalten.
+
+   **b) Projektbeschreibung erstellen** (optional mit KI-Unterstützung):
+   ```bash
+   # KI-Prompt mit Projektkontext generieren (sammelt README, docs/, config-Dateien)
+   python3 tools/projekt_aggregator.py --generate-prompt > prompt.txt
+
+   # Oder mit Docker
+   docker run --rm -v $(pwd):/project projekt-aggregator --generate-prompt > prompt.txt
+
+   # Den Prompt einer KI übergeben (z.B. Claude, ChatGPT) und die
+   # generierte PROJEKTBESCHREIBUNG in beschreibung.txt speichern
+   ```
+
+   **c) Import ins RAG-System**:
+   ```bash
+   curl -X POST http://localhost:8100/extract/aggregated-md \
+        -F "file=@mein_projekt.md" \
+        -F "roles=dev,architect" \
+        -F "auto_update=true" | jq
+   ```
+
+   **d) Projekt durchsuchen**:
+   ```bash
+   curl -X POST localhost:8000/query \
+        -H "Content-Type: application/json" \
+        -d '{"question":"Welches Architektur-Pattern wird verwendet?"}' | jq
+   ```
+
+   Das Format erkennt automatisch Dokument-Typen (`lastenheft`, `pflichtenheft`, `architektur`, `design`, `source_code`) und speichert Metadaten wie `project_id`, `doc_type`, `language`, `directory`.
+
+   Siehe [ARCHITECTURE.md](docs/ARCHITECTURE.md#35-aggregiertes-markdown-format) für Details zum Format.
+
+8. **Testumgebung für Aggregiertes Markdown**:
+
+   Eine minimale Testumgebung (ohne Bot, Rasa, Reranker) steht zur Verfügung:
+   ```bash
+   # Starten
+   docker compose -f docker-compose.test.yml up -d
+
+   # Warten bis Modelle geladen (beim ersten Mal)
+   docker logs -f test-ollama-init
+
+   # Test ausführen
+   ./tools/test_aggregated_import.sh
+
+   # Aufräumen
+   docker compose -f docker-compose.test.yml down -v
+   ```
+
+9. **Alte Daten entfernen**:
    - Ganze Collection löschen und frisch befüllen:
      ```bash
      curl -X DELETE http://localhost:6333/collections/demo_documents
@@ -129,7 +205,7 @@ Detaillierte Informationen finden sich im `docs/` Verzeichnis:
      ```
      Anschließend die aktualisierte Datei erneut ingestieren.
 
-8. **MCP-Gateway (JSON-RPC) nutzen**:
+10. **MCP-Gateway (JSON-RPC) nutzen**:
    - Der Dienst läuft auf Port 8800 und akzeptiert JSON-RPC-Anfragen auf `/mcp`.
    - Tools auflisten:
      ```bash

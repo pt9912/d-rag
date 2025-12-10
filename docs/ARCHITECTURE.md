@@ -54,7 +54,7 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 | `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                           |
 | `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                            |
 | `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                  |
-| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf` und `/extract/zip` (`extractor/app/main.py`). Extrahiert Text mit `pypdf`, schreibt Markdown nach `rag/data/*.md` und ruft optional `/update` auf dem RAG-Service.                                                         |
+| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf`, `/extract/zip` und `/extract/aggregated-md` (`extractor/app/main.py`). Extrahiert Text aus PDFs (`pypdf`), Markdown/Text-Dateien und aggregierten Projektdateien. Schreibt nach `rag/data/*.md` und ruft optional `/update` auf.                                                         |
 | `bot`                                     | Express (Node 20)               | Optionaler Proxy zu Rasa `/webhooks/rest/webhook` und zum RAG-Service; kann statische Antworten liefern und Header (z. B. Rollen) weitergeben. Für Dialogmanagement übernimmt primär Rasa.                                                          |
 | `rasa`                                    | Rasa 3.6.21                     | Dialog-Engine (Deutsch) mit Slots, Forms, Policies (Rule/Memoization/TED) und FallbackClassifier. REST-Endpoint `/webhooks/rest/webhook`.                                                                                                           |
 | `action-server`                           | rasa-sdk 3.6                    | Custom Actions: `action_query_rag` ruft RAG `/query` mit Slots/History/Rollen, trimmt History; Form-Validierung; Kontext-Reset; Prometheus-Metriken `/metrics` (Port 8001).                                                                         |
@@ -70,7 +70,8 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 | rag-service    | `/update`             | POST        | Re-Ingest/Delta-Update                           |
 | rag-service    | `/git/webhook/{repo}` | POST        | Git-Push-Webhook (optional signiert)             |
 | extractor      | `/extract/pdf`        | POST        | PDF → Markdown                                   |
-| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Markdown-Dateien                   |
+| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Dateien (PDF, MD, TXT)             |
+| extractor      | `/extract/aggregated-md` | POST     | Aggregiertes Projekt-Markdown → Chunks           |
 | bot            | `/ask`                | POST        | Intent-Routing + Proxy auf RAG                   |
 | bot            | `/readyz`             | GET         | Readiness, prüft Rasa `/status`                  |
 | bot            | `/metrics`            | GET         | Prometheus-Metriken (Intent/Fallback/Confidence) |
@@ -112,11 +113,252 @@ Latenz-Richtwerte (abhängig von Hardware/Modell):
 4. **Update über Webhook:** `/git/webhook/{repo}` validiert HMAC-Signaturen (`verify_signature`), ermittelt geänderte Dateien via `diff_changed_files` und aktualisiert nur betroffene Chunks. Deletions/Umbenennungen werden durch gezieltes Löschen behandelt.
 
 ### 3.4 PDF-/ZIP-Verarbeitung
-1. **Upload:** `/extract/pdf` akzeptiert `multipart/form-data`. ZIP-Endpoint extrahiert mehrere PDFs.
+1. **Upload:** `/extract/pdf` akzeptiert `multipart/form-data`. ZIP-Endpoint (`/extract/zip`) extrahiert mehrere Dateien (PDF, MD, Markdown, TXT).
 2. **Speicherung:** Datei wird in Markdown konvertiert, Name per `slugify`/`ensure_suffix` normalisiert und nach `rag/data/<name>.md` geschrieben.
 3. **Automatisches Update:** Ist `auto_update=true` und `RAG_SERVICE_URL` gesetzt, ruft der Dienst `/update` auf (rollen können via `roles`-Formfeld übergeben werden).
 
-### 3.5 Observability
+### 3.5 Aggregiertes Markdown-Format
+
+Der Stack unterstützt ein spezielles Markdown-Format, das ganze Codebasen in einer einzigen Datei aggregiert. Dieses Format wird durch das mitgelieferte Generator-Tool erstellt.
+
+#### Generator-Tool: `projekt_aggregator.py`
+
+Ein Python-Skript, das Projektstruktur, Dokumentation und Source-Code in eine einzige Markdown-Datei zusammenfasst.
+
+**Verwendung:**
+
+```bash
+cd /pfad/zum/projekt
+python projekt_aggregator.py
+# Erzeugt: projekt_komplett.md
+
+# Mit Beschreibung aus Datei
+python projekt_aggregator.py --description @beschreibung.txt
+
+# Ausgabe nach stdout
+python projekt_aggregator.py --output -
+
+# KI-Prompt generieren (sammelt README, docs/, Config-Dateien)
+python projekt_aggregator.py --generate-prompt > prompt.txt
+```
+
+**Docker-Verwendung:**
+
+```bash
+docker build -t projekt-aggregator ./tools
+docker run --rm -v $(pwd):/project projekt-aggregator --output mein_projekt.md
+
+# Mit externer Beschreibungsdatei
+docker run --rm -v $(pwd):/project -v ~/templates:/config projekt-aggregator --description @/config/beschreibung.txt
+
+# KI-Prompt generieren
+docker run --rm -v $(pwd):/project projekt-aggregator --generate-prompt
+```
+
+**Konfiguration** (im Skript anpassbar):
+
+```python
+# Ausgabedatei
+output_filename = "projekt_komplett.md"
+
+# Projektbeschreibung für KI-Kontext (siehe KI-Prompt unten)
+PROJEKT_BESCHREIBUNG = """
+# PROJEKTBESCHREIBUNG
+Projektname: Kundenportal-v2
+Ziel: Self-Service-Portal für Endkunden mit Vertragsverwaltung
+
+Domäne: Versicherung, B2C-Portal
+Technologie-Stack: Python 3.11, FastAPI, PostgreSQL, Vue.js 3
+Architektur-Pattern: Clean Architecture, CQRS
+
+Problemstellung:
+Monolithisches Legacy-Portal mit hohem Support-Aufwand ersetzen.
+
+Wichtige Entscheidungen:
+- Clean Architecture für Testbarkeit
+- CQRS für optimierte Lese-/Schreibpfade
+
+Schlüsselkomponenten:
+- api-gateway: Request-Routing, Auth
+- contract-service: Vertragsverwaltung
+
+Schlagworte: Self-Service, Kundenportal, Versicherung, FastAPI, Vue.js
+"""
+
+# Zu erfassende Dateitypen
+extensions = ['.md', '.py', '.js', '.html', '.css', '.java',
+              '.cpp', '.h', '.json', '.yaml', '.sql', '.txt']
+
+# Ausgeschlossene Verzeichnisse
+ignore_folders = ['.git', '__pycache__', 'node_modules', 'venv',
+                  '.idea', '.vscode', 'build', 'dist', 'bin', 'obj']
+```
+
+**Ausgabe-Struktur:**
+
+1. `# VERZEICHNISSTRUKTUR` – ASCII-Baum aller erfassten Dateien
+2. `# PROJEKTBESCHREIBUNG` – Konfigurierter Kontext für die KI
+3. `# DATEIINHALTE` – Jede Datei als `## DATEI: <pfad>` mit Code-Fence
+
+**Hinweise:**
+- Das Skript überspringt sich selbst und die Ausgabedatei
+- Dateien werden UTF-8-kodiert gelesen
+- Große Projekte erzeugen große Markdown-Dateien (ggf. selektiv Extensions wählen)
+
+**KI-Prompt für Projektbeschreibung:**
+
+Um eine optimale Projektbeschreibung zu erstellen, kann folgender Prompt mit einer KI verwendet werden:
+
+```
+Du bist ein Software-Architekt, der Projektdokumentationen für ein Wissensarchiv aufbereitet.
+
+Erstelle aus meinen Projektinformationen eine strukturierte Projektbeschreibung:
+
+# PROJEKTBESCHREIBUNG
+Projektname: [Name]
+Ziel: [1-2 Sätze]
+
+Domäne: [Fachgebiet, z.B. E-Commerce, Fintech, Healthcare]
+Technologie-Stack: [Sprachen, Frameworks, Datenbanken]
+Architektur-Pattern: [z.B. Clean Architecture, Microservices, MVC]
+
+Problemstellung:
+[2-3 Sätze zur Ausgangssituation]
+
+Wichtige Entscheidungen:
+- [Entscheidung 1 mit Begründung]
+- [Entscheidung 2 mit Begründung]
+
+Schlüsselkomponenten:
+- [Komponente]: [Beschreibung]
+
+Schlagworte: [kommaseparierte Liste für Ähnlichkeitssuche]
+
+Achte auf präzise, suchbare Begriffe und technische Tiefe.
+```
+
+Siehe `docs/design/sprint-task-projekt-aggregator.md` für den vollständigen Prompt mit Beispiel.
+
+#### Format-Struktur
+
+Das Format besteht aus drei Hauptsektionen:
+
+1. **Verzeichnisstruktur** – ASCII-Baum des Projekts
+2. **Projektbeschreibung** – Kontext und Hinweise für die Verarbeitung
+3. **Dateiinhalte** – Jede Datei als eigene `## DATEI:`-Sektion mit Code-Fence
+
+```markdown
+# VERZEICHNISSTRUKTUR
+​```text
+.
+├── src/
+│   ├── main.py
+│   └── utils.py
+└── README.md
+​```
+
+---
+# PROJEKTBESCHREIBUNG
+[Beschreibung des Projekts und Hinweise für die Verarbeitung]
+
+---
+# DATEIINHALTE
+
+---
+## DATEI: ./src/main.py
+​```python
+<Dateiinhalt>
+​```
+
+---
+## DATEI: ./src/utils.py
+​```python
+<Dateiinhalt>
+​```
+```
+
+#### Verarbeitung mit MarkdownHeaderTextSplitter
+
+Das Format ist so strukturiert, dass es mit LangChains `MarkdownHeaderTextSplitter` effizient in Chunks aufgeteilt werden kann:
+
+```python
+from langchain.text_splitter import MarkdownHeaderTextSplitter
+
+headers_to_split_on = [
+    ("#", "Header 1"),      # z.B. # DATEIINHALTE
+    ("##", "Dateiname"),    # z.B. ## DATEI: ./ordner/main.py
+]
+
+markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+docs = markdown_splitter.split_text(text)
+
+# Ergebnis: Jede Datei wird ein eigener Chunk mit Metadaten
+# docs[n].metadata = {'Dateiname': 'DATEI: ./src/main.py', ...}
+```
+
+#### Use-Case: Projekt-Wissensarchiv
+
+Das Format eignet sich besonders für ein **Projekt-Wissensarchiv** – eine Sammlung abgeschlossener Projekte mit Dokumentation und Source-Code. Bei neuen Anforderungen können ähnliche Architekturen und Lösungen gefunden werden.
+
+Typische Inhalte pro Projekt-Datei:
+- **Lastenheft** – Anforderungen, Stakeholder, Rahmenbedingungen
+- **Pflichtenheft** – Technische Spezifikation, Abnahmekriterien
+- **Architektur-Dokumentation** – Systemübersicht, Komponenten, Schnittstellen
+- **Design-Dokumente** – Detailentwürfe, Datenmodelle, Sequenzdiagramme
+- **Source-Code** – Implementierung mit Kommentaren
+
+#### Extrahierte Metadaten
+
+Für jeden Chunk werden folgende Metadaten in Qdrant gespeichert:
+
+| Metadatum | Quelle | Beispiel |
+|-----------|--------|----------|
+| `project_name` | Aus `# PROJEKTBESCHREIBUNG` parsen | `Kundenportal-v2` |
+| `project_id` | Slug aus project_name | `kundenportal-v2` |
+| `doc_type` | Aus Dateipfad/Header erkennen | `lastenheft`, `pflichtenheft`, `architektur`, `design`, `source_code` |
+| `source` | Dateipfad aus `## DATEI:` | `./src/main.py` |
+| `language` | Code-Fence-Sprache | `python` |
+| `directory` | Abgeleitet aus Pfad | `./src` |
+| `extension` | Abgeleitet aus Pfad | `.py` |
+
+**Dokument-Typ-Erkennung** (`doc_type`):
+
+| Erkennungsmuster | doc_type |
+|------------------|----------|
+| `lastenheft`, `anforderung`, `requirements` im Pfad/Header | `lastenheft` |
+| `pflichtenheft`, `spec`, `specification` im Pfad/Header | `pflichtenheft` |
+| `architektur`, `architecture`, `ARCHITECTURE` im Pfad/Header | `architektur` |
+| `design`, `entwurf`, `konzept` im Pfad/Header | `design` |
+| Code-Dateien (`.py`, `.js`, `.java`, etc.) | `source_code` |
+
+Die Projektbeschreibung und Verzeichnisstruktur werden als eigene Chunks mit `doc_type: meta` gespeichert.
+
+#### Vorteile
+
+- **Ähnlichkeitssuche:** „Zeige mir Projekte mit REST-API und PostgreSQL" findet passende Architekturen
+- **Dokument-Typ-Filter:** Suche nur in Lastenheften, nur in Source-Code, oder übergreifend
+- **Projekt-übergreifend:** Ein Query durchsucht alle archivierten Projekte gleichzeitig
+- **Kontexterhaltung:** Jeder Chunk behält Projekt-Zugehörigkeit und Dateipfad
+- **Batch-Import:** Ganze Projekte können mit einem Upload ingestiert werden
+
+#### Unterstützte Dateitypen
+
+| Extension | Sprache für Code-Fence |
+|-----------|------------------------|
+| `.py`     | `python`               |
+| `.js`     | `js`                   |
+| `.ts`     | `typescript`           |
+| `.java`   | `java`                 |
+| `.cpp`    | `cpp`                  |
+| `.h`      | `c`                    |
+| `.json`   | `json`                 |
+| `.yaml`   | `yaml`                 |
+| `.sql`    | `sql`                  |
+| `.md`     | `markdown`             |
+| `.html`   | `html`                 |
+| `.css`    | `css`                  |
+
+### 3.6 Observability
 1. Collector akzeptiert OTLP (`otel-collector:4317/4318`). RAG-/Extractor sind derzeit nicht mit OTEL-SDKs instrumentiert; Bot exportiert eigene Prometheus-Metriken (`/metrics`).
 2. Collector exportiert Traces als Logs und Metrics an einen eingebetteten Prometheus-Endpoint (`:9464`); keine Logs nach Prometheus.
 3. Prometheus scraped den Collector und den Bot alle 15s (`prometheus.yml`), stellt Daten Grafana zur Verfügung.
