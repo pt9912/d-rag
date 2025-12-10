@@ -1,0 +1,126 @@
+# Minimale Testumgebung für Aggregiertes Markdown Import & Query
+#
+# Verwendung:
+#   docker compose -f docker-compose.test.yml up -d
+#   ./tools/test_aggregated_import.sh
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Enthält nur die notwendigen Services:
+#   - qdrant (Vektordatenbank)
+#   - ollama (Embeddings + LLM)
+#   - rag-service (RAG Pipeline)
+#   - extractor (Import Endpoint)
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: test-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - test_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: test-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - test_ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Ollama Model Pull (einmalig)
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: test-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - test_ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling embedding model..."
+        ollama pull nomic-embed-text
+        echo "Pulling LLM model..."
+        ollama pull llama3.2:1b
+        echo "Models ready!"
+    restart: "no"
+
+  rag-service:
+    image: python:3.11-slim
+    container_name: test-rag-service
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - |
+        pip install --no-cache-dir . &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./rag:/app
+      - ./rag/data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - RERANKER_URL=
+      - LLM_MODEL=llama3.2:1b
+      - EMBEDDING_MODEL=nomic-embed-text
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  extractor:
+    image: python:3.11-slim
+    container_name: test-extractor
+    working_dir: /app
+    command:
+      - bash
+      - -lc
+      - |
+        pip install --no-cache-dir . &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8100
+    volumes:
+      - ./extractor:/app
+      - ./rag/data:/data
+    ports:
+      - "8100:8100"
+    environment:
+      - EXTRACT_OUTPUT_DIR=/data
+      - RAG_SERVICE_URL=http://rag-service:8000
+    depends_on:
+      rag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  test_qdrant_data:
+  test_ollama_models:
