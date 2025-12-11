@@ -48,35 +48,35 @@ Dieses Dokument beschreibt Aufbau, Komponenten und Datenflüsse des RAG-Demostac
 
 ## 2. Komponenten & Verantwortlichkeiten
 
-| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                             |
-| ----------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`). |
-| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                           |
-| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                            |
-| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                  |
-| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf`, `/extract/zip` und `/extract/aggregated-md` (`extractor/app/main.py`). Extrahiert Text aus PDFs (`pypdf`), Markdown/Text-Dateien und aggregierten Projektdateien. Schreibt nach `rag/data/*.md` und ruft optional `/update` auf.                                                         |
-| `bot`                                     | Express (Node 20)               | Optionaler Proxy zu Rasa `/webhooks/rest/webhook` und zum RAG-Service; kann statische Antworten liefern und Header (z. B. Rollen) weitergeben. Für Dialogmanagement übernimmt primär Rasa.                                                          |
-| `rasa`                                    | Rasa 3.6.21                     | Dialog-Engine (Deutsch) mit Slots, Forms, Policies (Rule/Memoization/TED) und FallbackClassifier. REST-Endpoint `/webhooks/rest/webhook`.                                                                                                           |
-| `action-server`                           | rasa-sdk 3.6                    | Custom Actions: `action_query_rag` ruft RAG `/query` mit Slots/History/Rollen, trimmt History; Form-Validierung; Kontext-Reset; Prometheus-Metriken `/metrics` (Port 8001).                                                                         |
-| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                  |
-| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                       |
+| Komponente                                | Technology                      | Aufgabe                                                                                                                                                                                                                                                    |
+| ----------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag-service`                             | FastAPI, Python 3.11            | Kernpipeline für Ingest, Update und Query (`rag/app/main.py`). Verwaltet Chunking, Einbettung via Ollama (`ollama_client.py`), Re-Ranking (`reranker_client.py`), Persistenz in Qdrant (`vectorstore.py`) und Git-basierte Quellen (`git_sync.py`).        |
+| `qdrant`                                  | Qdrant 1.7                      | Vektor-Datenbank. Wird bei Bedarf vom RAG-Service initialisiert (`VectorStore.ensure_collection`). Legt Daten in Volume `qdrant_data` ab.                                                                                                                  |
+| `ollama`                                  | Ollama Daemon                   | Stellt Embedding- (`nomic-embed-text`) und LLM-Modell (`llama3`) bereit. Läuft im selben Compose-Netz, sodass der RAG-Service HTTP-Requests senden kann.                                                                                                   |
+| `reranker`                                | TEI (Text Embeddings Inference) | Re-Ranking-Service mit BGE-Modell (`BAAI/bge-reranker-large`). Bewertet Kandidaten aus der Vektorsuche nach semantischer Relevanz zur Query und sortiert sie neu. Modell wird in Volume `reranker_models` gecacht.                                         |
+| `extractor`                               | FastAPI                         | Endpunkte `/extract/pdf`, `/extract/zip` und `/extract/aggregated-md` (`extractor/app/main.py`). Extrahiert Text aus PDFs (`pypdf`), Markdown/Text-Dateien und aggregierten Projektdateien. Schreibt nach `rag/data/*.md` und ruft optional `/update` auf. |
+| `bot`                                     | Express (Node 20)               | Optionaler Proxy zu Rasa `/webhooks/rest/webhook` und zum RAG-Service; kann statische Antworten liefern und Header (z. B. Rollen) weitergeben. Für Dialogmanagement übernimmt primär Rasa.                                                                 |
+| `rasa`                                    | Rasa 3.6.21                     | Dialog-Engine (Deutsch) mit Slots, Forms, Policies (Rule/Memoization/TED) und FallbackClassifier. REST-Endpoint `/webhooks/rest/webhook`.                                                                                                                  |
+| `action-server`                           | rasa-sdk 3.6                    | Custom Actions: `action_query_rag` ruft RAG `/query` mit Slots/History/Rollen, trimmt History; Form-Validierung; Kontext-Reset; Prometheus-Metriken `/metrics` (Port 8001).                                                                                |
+| `mcp`                                     | FastMCP                         | JSON-RPC-Gateway (Model Context Protocol). Exportiert Tools `rag.query`, `rag.ingest`, `rag.update`, die intern die REST-Endpunkte ansprechen (`mcp/app/main.py`).                                                                                         |
+| `otel-collector`, `prometheus`, `grafana` | Observability-Stack             | Collector nimmt OTLP-Traces/Metrics entgegen (siehe `otel-collector-config.yaml`), exponiert Metriken an Prometheus (`prometheus.yml`). Grafana visualisiert.                                                                                              |
 
 ### 2.1 Wichtige Endpunkte
 
-| Service        | Endpoint              | Methode     | Beschreibung                                     |
-| -------------- | --------------------- | ----------- | ------------------------------------------------ |
-| rag-service    | `/query`              | POST        | Haupt-RAG-Query                                  |
-| rag-service    | `/ingest`             | POST        | Manuelles Ingest                                 |
-| rag-service    | `/update`             | POST        | Re-Ingest/Delta-Update                           |
-| rag-service    | `/git/webhook/{repo}` | POST        | Git-Push-Webhook (optional signiert)             |
-| extractor      | `/extract/pdf`        | POST        | PDF → Markdown                                   |
-| extractor      | `/extract/zip`        | POST        | ZIP → mehrere Dateien (PDF, MD, TXT)             |
-| extractor      | `/extract/aggregated-md` | POST     | Aggregiertes Projekt-Markdown → Chunks           |
-| bot            | `/ask`                | POST        | Intent-Routing + Proxy auf RAG                   |
-| bot            | `/readyz`             | GET         | Readiness, prüft Rasa `/status`                  |
-| bot            | `/metrics`            | GET         | Prometheus-Metriken (Intent/Fallback/Confidence) |
-| reranker (TEI) | `/rerank`             | POST        | Cross-Encoder Re-Ranking                         |
-| mcp            | JSON-RPC Tools        | POST/stream | `rag.query`, `rag.ingest`, `rag.update`          |
+| Service        | Endpoint                 | Methode     | Beschreibung                                     |
+| -------------- | ------------------------ | ----------- | ------------------------------------------------ |
+| rag-service    | `/query`                 | POST        | Haupt-RAG-Query                                  |
+| rag-service    | `/ingest`                | POST        | Manuelles Ingest                                 |
+| rag-service    | `/update`                | POST        | Re-Ingest/Delta-Update                           |
+| rag-service    | `/git/webhook/{repo}`    | POST        | Git-Push-Webhook (optional signiert)             |
+| extractor      | `/extract/pdf`           | POST        | PDF → Markdown                                   |
+| extractor      | `/extract/zip`           | POST        | ZIP → mehrere Dateien (PDF, MD, TXT)             |
+| extractor      | `/extract/aggregated-md` | POST        | Aggregiertes Projekt-Markdown → Chunks           |
+| bot            | `/ask`                   | POST        | Intent-Routing + Proxy auf RAG                   |
+| bot            | `/readyz`                | GET         | Readiness, prüft Rasa `/status`                  |
+| bot            | `/metrics`               | GET         | Prometheus-Metriken (Intent/Fallback/Confidence) |
+| reranker (TEI) | `/rerank`                | POST        | Cross-Encoder Re-Ranking                         |
+| mcp            | JSON-RPC Tools           | POST/stream | `rag.query`, `rag.ingest`, `rag.update`          |
 
 ## 3. Datenflüsse
 
@@ -237,7 +237,7 @@ Schlagworte: [kommaseparierte Liste für Ähnlichkeitssuche]
 Achte auf präzise, suchbare Begriffe und technische Tiefe.
 ```
 
-Siehe `docs/design/sprint-task-projekt-aggregator.md` für den vollständigen Prompt mit Beispiel.
+Siehe `docs/archive/sprint-task-projekt-aggregator.md` für den vollständigen Prompt mit Beispiel.
 
 #### Format-Struktur
 
@@ -311,25 +311,25 @@ Typische Inhalte pro Projekt-Datei:
 
 Für jeden Chunk werden folgende Metadaten in Qdrant gespeichert:
 
-| Metadatum | Quelle | Beispiel |
-|-----------|--------|----------|
-| `project_name` | Aus `# PROJEKTBESCHREIBUNG` parsen | `Kundenportal-v2` |
-| `project_id` | Slug aus project_name | `kundenportal-v2` |
-| `doc_type` | Aus Dateipfad/Header erkennen | `lastenheft`, `pflichtenheft`, `architektur`, `design`, `source_code` |
-| `source` | Dateipfad aus `## DATEI:` | `./src/main.py` |
-| `language` | Code-Fence-Sprache | `python` |
-| `directory` | Abgeleitet aus Pfad | `./src` |
-| `extension` | Abgeleitet aus Pfad | `.py` |
+| Metadatum      | Quelle                             | Beispiel                                                              |
+| -------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `project_name` | Aus `# PROJEKTBESCHREIBUNG` parsen | `Kundenportal-v2`                                                     |
+| `project_id`   | Slug aus project_name              | `kundenportal-v2`                                                     |
+| `doc_type`     | Aus Dateipfad/Header erkennen      | `lastenheft`, `pflichtenheft`, `architektur`, `design`, `source_code` |
+| `source`       | Dateipfad aus `## DATEI:`          | `./src/main.py`                                                       |
+| `language`     | Code-Fence-Sprache                 | `python`                                                              |
+| `directory`    | Abgeleitet aus Pfad                | `./src`                                                               |
+| `extension`    | Abgeleitet aus Pfad                | `.py`                                                                 |
 
 **Dokument-Typ-Erkennung** (`doc_type`):
 
-| Erkennungsmuster | doc_type |
-|------------------|----------|
-| `lastenheft`, `anforderung`, `requirements` im Pfad/Header | `lastenheft` |
-| `pflichtenheft`, `spec`, `specification` im Pfad/Header | `pflichtenheft` |
-| `architektur`, `architecture`, `ARCHITECTURE` im Pfad/Header | `architektur` |
-| `design`, `entwurf`, `konzept` im Pfad/Header | `design` |
-| Code-Dateien (`.py`, `.js`, `.java`, etc.) | `source_code` |
+| Erkennungsmuster                                             | doc_type        |
+| ------------------------------------------------------------ | --------------- |
+| `lastenheft`, `anforderung`, `requirements` im Pfad/Header   | `lastenheft`    |
+| `pflichtenheft`, `spec`, `specification` im Pfad/Header      | `pflichtenheft` |
+| `architektur`, `architecture`, `ARCHITECTURE` im Pfad/Header | `architektur`   |
+| `design`, `entwurf`, `konzept` im Pfad/Header                | `design`        |
+| Code-Dateien (`.py`, `.js`, `.java`, etc.)                   | `source_code`   |
 
 Die Projektbeschreibung und Verzeichnisstruktur werden als eigene Chunks mit `doc_type: meta` gespeichert.
 
@@ -344,7 +344,7 @@ Die Projektbeschreibung und Verzeichnisstruktur werden als eigene Chunks mit `do
 #### Unterstützte Dateitypen
 
 | Extension | Sprache für Code-Fence |
-|-----------|------------------------|
+| --------- | ---------------------- |
 | `.py`     | `python`               |
 | `.js`     | `js`                   |
 | `.ts`     | `typescript`           |
