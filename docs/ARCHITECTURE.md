@@ -204,40 +204,7 @@ ignore_folders = ['.git', '__pycache__', 'node_modules', 'venv',
 - Das Skript überspringt sich selbst und die Ausgabedatei
 - Dateien werden UTF-8-kodiert gelesen
 - Große Projekte erzeugen große Markdown-Dateien (ggf. selektiv Extensions wählen)
-
-**KI-Prompt für Projektbeschreibung:**
-
-Um eine optimale Projektbeschreibung zu erstellen, kann folgender Prompt mit einer KI verwendet werden:
-
-```
-Du bist ein Software-Architekt, der Projektdokumentationen für ein Wissensarchiv aufbereitet.
-
-Erstelle aus meinen Projektinformationen eine strukturierte Projektbeschreibung:
-
-# PROJEKTBESCHREIBUNG
-Projektname: [Name]
-Ziel: [1-2 Sätze]
-
-Domäne: [Fachgebiet, z.B. E-Commerce, Fintech, Healthcare]
-Technologie-Stack: [Sprachen, Frameworks, Datenbanken]
-Architektur-Pattern: [z.B. Clean Architecture, Microservices, MVC]
-
-Problemstellung:
-[2-3 Sätze zur Ausgangssituation]
-
-Wichtige Entscheidungen:
-- [Entscheidung 1 mit Begründung]
-- [Entscheidung 2 mit Begründung]
-
-Schlüsselkomponenten:
-- [Komponente]: [Beschreibung]
-
-Schlagworte: [kommaseparierte Liste für Ähnlichkeitssuche]
-
-Achte auf präzise, suchbare Begriffe und technische Tiefe.
-```
-
-Siehe `docs/archive/sprint-task-projekt-aggregator.md` für den vollständigen Prompt mit Beispiel.
+- Für KI-Prompts zur Erstellung von Projektbeschreibungen siehe `docs/archive/sprint-task-projekt-aggregator.md`
 
 #### Format-Struktur
 
