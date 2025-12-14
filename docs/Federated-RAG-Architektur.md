@@ -9,6 +9,7 @@ Diese Architektur ergänzt ein monolithisches RAG-Setup um **spezialisierte, iso
 Bezug zum Repo:
 - Dieses Repo bringt bereits ein **MCP-Gateway** mit (Tools `rag.query`, `rag.ingest`, `rag.update`, siehe `mcp/app/main.py`).
 - Federated-RAG bedeutet hier: **mehrere Instanzen** (oder Varianten) dieses Moduls parallel betreiben (z. B. je Domäne eigene Datenbasis, Chunking, Embeddings, Reranker, Collection/Vectorstore) und im Agenten passend routen.
+- Für Federated-Routing sollte die **MCP-Description/Instructions** pro Gateway **konfigurierbar** sein (z. B. via `MCP_INSTRUCTIONS`), damit ein Agent die Zuständigkeiten der Domänen sauber unterscheiden kann.
 
 ---
 
@@ -53,6 +54,8 @@ Bezug zum Repo:
   - Pro Domäne existiert typischerweise:
     - ein **RAG-Service** (z. B. FastAPI) für `/query`, `/ingest`, `/update` (ähnlich `rag-service` in diesem Repo),
     - ein **MCP-Gateway** (z. B. FastMCP) das diese REST-Endpunkte als MCP-Tools exportiert (ähnlich `mcp` in diesem Repo).
+  - **Wichtig für Federated-Betrieb**:
+    - Die MCP-Server-Metadaten (insb. *Description/Instructions*) sollten pro Instanz konfigurierbar sein, z. B. per Env-Var `MCP_INSTRUCTIONS="Gateway für Java-Doku (nur Code- und API-Fragen)"`.
   - **MCP-Tool-Schema (Beispiel aus diesem Repo)**:
     - `rag.query`
     - `rag.ingest`
@@ -113,9 +116,13 @@ Bezug zum Repo:
 In diesem Repo entspricht das in etwa `mcp/app/main.py` (FastMCP), das REST-Endpunkte des RAG-Services als MCP-Tools bereitstellt.
 
 ```python
+import os
 from mcp.server.fastmcp import FastMCP
 
-server = FastMCP(name="rag-mcp-gateway-java", instructions="Gateway für Java-RAG.")
+server = FastMCP(
+    name="rag-mcp-gateway-java",
+    instructions=os.getenv("MCP_INSTRUCTIONS", "Gateway für Java-RAG."),
+)
 
 @server.tool(name="rag.query", description="Stellt eine Frage an den Java-RAG-Dienst.")
 async def rag_query(question: str, roles: list[str] | None = None) -> str:
@@ -199,6 +206,7 @@ services:
     ports: ["8801:8800"]
     environment:
       RAG_SERVICE_URL: http://rag-java:8000
+      MCP_INSTRUCTIONS: Gateway für Java-RAG (Code, APIs, Libraries).
     depends_on: [rag-java]
 
   mcp-docs:
@@ -209,6 +217,7 @@ services:
     ports: ["8802:8800"]
     environment:
       RAG_SERVICE_URL: http://rag-docs:8000
+      MCP_INSTRUCTIONS: Gateway für Domänen-Dokumente (Guides, ADRs, Architektur).
     depends_on: [rag-docs]
 
   mcp-tickets:
@@ -219,6 +228,7 @@ services:
     ports: ["8803:8800"]
     environment:
       RAG_SERVICE_URL: http://rag-tickets:8000
+      MCP_INSTRUCTIONS: Gateway für Tickets (Incidents, Worklogs, Verlauf).
     depends_on: [rag-tickets]
 ```
 
@@ -272,6 +282,7 @@ services:
       RAG_JAVA_URL: http://rag-java:8000
       RAG_DOCS_URL: http://rag-docs:8000
       RAG_TICKETS_URL: http://rag-tickets:8000
+      MCP_INSTRUCTIONS: Federated MCP Router (Java/Dokumente/Tickets).
     depends_on: [rag-java, rag-docs, rag-tickets]
 ```
 
