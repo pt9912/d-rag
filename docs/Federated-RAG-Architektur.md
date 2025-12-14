@@ -10,6 +10,7 @@ Bezug zum Repo:
 - Dieses Repo bringt bereits ein **MCP-Gateway** mit (Tools `rag.query`, `rag.ingest`, `rag.update`, siehe `mcp/app/main.py`).
 - Federated-RAG bedeutet hier: **mehrere Instanzen** (oder Varianten) dieses Moduls parallel betreiben (z. B. je Domäne eigene Datenbasis, Chunking, Embeddings, Reranker, Collection/Vectorstore) und im Agenten passend routen.
 - Für Federated-Routing sollte die **MCP-Description/Instructions** pro Gateway **konfigurierbar** sein (z. B. via `MCP_INSTRUCTIONS`), damit ein Agent die Zuständigkeiten der Domänen sauber unterscheiden kann.
+- Zusätzlich sollten **Chunking-Parameter/Strategie** und das **Indexing-Metadaten-Schema** konfigurierbar sein (idealerweise über Dokumenttypen wie Confluence/Jira), damit Retrieval (Filter, ACL/Rollen, Routing) zuverlässig funktioniert.
 
 ---
 
@@ -56,6 +57,14 @@ Bezug zum Repo:
     - ein **MCP-Gateway** (z. B. FastMCP) das diese REST-Endpunkte als MCP-Tools exportiert (ähnlich `mcp` in diesem Repo).
   - **Wichtig für Federated-Betrieb**:
     - Die MCP-Server-Metadaten (insb. *Description/Instructions*) sollten pro Instanz konfigurierbar sein, z. B. per Env-Var `MCP_INSTRUCTIONS="Gateway für Java-Doku (nur Code- und API-Fragen)"`.
+    - Chunking sollte konfigurierbar sein (mindestens Größe/Overlap/Tokenizer; je nach Typ auch eine abweichende Strategie wie Header-/AST-/Field-basiertes Chunking).
+    - Indexing-Metadaten sollten konsistent und filterbar sein (z. B. `roles`, `source_kind`, `source_id`, `doc_type`, `domain`, `language`, `product`, `updated_at_ts`), damit:
+      - der Agent zuverlässig routen kann,
+      - Zugriffskontrolle (z. B. Rollen) durchgängig bleibt,
+      - Updates/Löschungen eindeutig adressierbar sind.
+    - In der Praxis ist es oft stabiler, **Chunking-Strategie und Metadaten-Policy über Dokumenttypen** festzulegen:
+      - `source_kind` beschreibt die Quelle/Struktur (z. B. `confluence`, `jira`, `git`, `file`).
+      - `doc_type` beschreibt die fachliche Kategorie (z. B. `runbook`, `adr`, `incident`, `howto`).
   - **MCP-Tool-Schema (Beispiel aus diesem Repo)**:
     - `rag.query`
     - `rag.ingest`
@@ -64,6 +73,48 @@ Bezug zum Repo:
 - **Vorteile**:
   - Isolation: Änderungen an einem Modul beeinflussen andere nicht.
   - Optimierung: Chunking/Embeddings pro Domäne (z. B. hierarchisch für XML, zeitbasiert für Tickets).
+
+#### 3.1.1 Dokumenttypen-Profile (Chunking + Metadaten)
+
+Zielbild: Eine Ingest-Pipeline normalisiert Inhalte aus verschiedenen Quellen und wählt anhand von `source_kind`/`doc_type` ein Profil, das:
+- eine Chunking-Strategie inkl. Parametern definiert,
+- ein Metadaten-Minimalschema (Pflichtfelder) erzwingt,
+- optionale Retrieval-Rescoring-Regeln (z. B. Recency-Boost) festlegt.
+
+Beispiel-Mapping:
+
+| `source_kind`  | Chunking-Strategie (Beispiel)          | Metadaten (Minimum)                                              | Besonderheiten |
+| -------------- | -------------------------------------- | ---------------------------------------------------------------- | ------------- |
+| `confluence`   | hierarchisch nach Überschriften        | `source_id`, `source_url`, `space_key`, `updated_at_ts`, `roles` | `section_path` für Struktur/Zitate |
+| `jira`         | **pro Ticket ein Dokument**            | `source_id`, `source_url`, `project_key`, `issue_key`, `updated_at_ts`, `roles` | optional: zeitbasiertes Boosting |
+| `aggregated-md`| projektweise, split pro Datei-Sektion  | `source_id`, `project_id`, `source_url?`, `doc_type`, `language`, `roles` | gut für Codebases (siehe `/extract/aggregated-md`) |
+| `git`          | code-/datei-basiert (optional AST)     | `source_id`, `git_repo`, `git_path`, `git_commit`, `roles`       | Update/Delete über `git_*` |
+| `file`         | token-basiert (Fallback)               | `source_id`, `source`, `updated_at_ts?`, `roles`                 | für Uploads/Extracts |
+
+Skizze einer Konfiguration (z. B. als YAML/JSON), die pro `source_kind` Profile definiert:
+
+```yaml
+profiles:
+  confluence:
+    chunking:
+      strategy: hierarchical_headers
+      params: { chunk_size: 900, chunk_overlap: 150, tokenizer_encoding: cl100k_base }
+    required_metadata: [source_kind, source_id, source_url, space_key, updated_at_ts, roles]
+
+  jira:
+    chunking:
+      strategy: jira_issue_single_document
+      params: { combine_fields: ["summary", "description", "comments"] }
+    required_metadata: [source_kind, source_id, source_url, project_key, issue_key, updated_at_ts, roles]
+    rescoring:
+      recency_boost: { field: updated_at_ts, weight: 0.2, half_life_days: 30 }
+
+  aggregated-md:
+    chunking:
+      strategy: aggregated_markdown_project_files
+      params: { split_on: "## DATEI:", preserve_frontmatter: true }
+    required_metadata: [source_kind, source_id, project_id, doc_type, language, roles]
+```
 
 ### 3.2 MCP Client / Tool-Adapter (LangChain)
 - **Zweck**: Verbindung zu allen MCP-Gateways, Laden der Tools (Discovery) und Ausführung (Call), optional in LangChain-Tools integriert.
@@ -176,6 +227,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_java
+      CHUNKING_PROFILE: aggregated-md
     depends_on: [qdrant]
 
   rag-docs:
@@ -186,6 +238,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_docs
+      CHUNKING_PROFILE: confluence
     depends_on: [qdrant]
 
   rag-tickets:
@@ -196,6 +249,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_tickets
+      CHUNKING_PROFILE: jira
     depends_on: [qdrant]
 
   mcp-java:
@@ -232,6 +286,8 @@ services:
     depends_on: [rag-tickets]
 ```
 
+Hinweis: `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOKENIZER_ENCODING` bleiben als sinnvolle **Defaults** für token-basiertes Chunking erhalten, aber im Federated-Zielbild werden sie typischerweise **aus dem Profil** (z. B. `confluence`/`jira`) abgeleitet bzw. überschrieben.
+
 ### 7.2 docker-compose Skizze: Single-Gateway-Router (ein MCP, mehrere Backends)
 
 Diese Variante setzt einen zusätzlichen Service (z. B. `mcp-router`) voraus, der Tool-Calls entgegennimmt und anhand eines Routing-Signals (z. B. `domain`-Argument oder Tool-Namenspräfix) an die passenden RAG-Services weiterleitet.
@@ -250,6 +306,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_java
+      CHUNKING_PROFILE: aggregated-md
     depends_on: [qdrant]
 
   rag-docs:
@@ -260,6 +317,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_docs
+      CHUNKING_PROFILE: confluence
     depends_on: [qdrant]
 
   rag-tickets:
@@ -270,6 +328,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       COLLECTION_NAME: rag_tickets
+      CHUNKING_PROFILE: jira
     depends_on: [qdrant]
 
   mcp-router:
